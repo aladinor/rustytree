@@ -55,9 +55,12 @@ jobs:
         run: |
           uv venv --python "${{ matrix.python-version }}"
           uv pip install --python .venv/bin/python maturin
+      - name: Install dev extras
+        # Install the [dev] extras directly rather than `pip install -e ".[dev]"`,
+        # which would re-trigger a full cdylib rebuild on top of maturin develop
+        # below (we'd build the wheel twice — saves ~80s per matrix cell).
+        run: uv pip install --python .venv/bin/python pytest pytest-cov 'zarr>=3.0' ruff
       - name: Build extension (maturin develop)
         run: .venv/bin/maturin develop
-      - name: Install dev extras
-        run: uv pip install --python .venv/bin/python -e ".[dev]"
       - name: pytest
         run: .venv/bin/pytest tests/ -v
