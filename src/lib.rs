@@ -2,10 +2,9 @@
 //!
 //! `xr.open_datatree(engine="rustytree")` resolves through this module's
 //! `open_datatree` `PyO3` function. Supported inputs today: local-filesystem
-//! paths (icechunk + vanilla Zarr v3) and `s3://` URLs (vanilla Zarr v3
-//! only — icechunk-on-S3 lands later). Only a single group's metadata is
-//! returned; recursive multi-node walks and lazy chunk reads ship in
-//! follow-up PRs.
+//! paths (icechunk + vanilla Zarr v3) and `s3://` URLs (icechunk + vanilla,
+//! auto-detected via a HEAD probe on `<prefix>/repo`). The walk is
+//! recursive and parallel; lazy chunk reads ship in follow-up PRs.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -28,12 +27,13 @@ use crate::error::Result;
 use crate::node::{NodeData, VarMeta};
 use crate::url::StoreSpec;
 
-/// Open a Zarr v3 store at `path` and return a metadata snapshot of the
-/// group at `group` (default `"/"`).
+/// Open a Zarr v3 store at `path` and return a metadata snapshot of every
+/// group in the tree rooted at `group` (default `"/"`).
 ///
 /// `path` may be a local-filesystem path, a `file://` URL, or an `s3://`
 /// URL. Local paths auto-detect between icechunk repositories and vanilla
-/// Zarr v3 directories. `branch` selects the icechunk branch (default
+/// Zarr v3 directories. S3 URLs do the same via a single HEAD on
+/// `<prefix>/repo`. `branch` selects the icechunk branch (default
 /// `"main"`); silently ignored on non-icechunk paths.
 ///
 /// `storage_options` accepts the standard fsspec/xarray-style keys for the
@@ -41,36 +41,39 @@ use crate::url::StoreSpec;
 /// `secret_access_key`, `session_token`, `allow_http`, `skip_signature`
 /// (alias `anon`). Unknown keys are rejected so typos surface immediately.
 ///
-/// The returned dict has:
+/// `max_concurrency` caps the number of concurrent group-discovery I/O
+/// operations (default 32). Per-array fan-out within each group is
+/// independent of this cap.
+///
+/// The returned dict is keyed by absolute group path:
 ///
 /// ```text
 /// {
-///     "path":   <group path>,
-///     "attrs":  <dict of group attrs>,
-///     "vars":   [
-///         {"name", "dims", "dtype", "shape", "attrs"},
-///         ...
-///     ],
+///     "/":          {"path", "attrs", "vars": [...]},
+///     "/group_a":   {"path", "attrs", "vars": [...]},
+///     "/group_a/x": {"path", "attrs", "vars": [...]},
+///     ...
 /// }
 /// ```
 #[pyfunction]
-#[pyo3(signature = (path, *, group = None, branch = None, storage_options = None))]
+#[pyo3(signature = (path, *, group = None, branch = None, storage_options = None, max_concurrency = None))]
 fn open_datatree<'py>(
     py: Python<'py>,
     path: &str,
     group: Option<&str>,
     branch: Option<&str>,
     storage_options: Option<&Bound<'_, PyDict>>,
+    max_concurrency: Option<usize>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let spec = url::parse_store_spec(path)?;
     let options = storage_options
         .map(parse_storage_options)
         .transpose()?
         .unwrap_or_default();
-    let group_path = group.unwrap_or("/");
+    let group_path = group.unwrap_or("/").to_string();
     let branch = branch.map(str::to_string);
 
-    let node = py.detach(move || -> Result<NodeData> {
+    let nodes = py.detach(move || -> Result<Vec<NodeData>> {
         runtime::handle().block_on(async {
             let store = match &spec {
                 StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
@@ -91,11 +94,11 @@ fn open_datatree<'py>(
                     }
                 }
             };
-            walk::open_single(&store, group_path).await
+            walk::walk_recursive(store, &group_path, max_concurrency).await
         })
     })?;
 
-    node_to_pydict(py, &node)
+    nodes_to_pydict(py, &nodes)
 }
 
 /// Convert a Python dict of `storage_options` into an owned
@@ -114,6 +117,15 @@ fn parse_storage_options(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, S
         out.insert(key, value);
     }
     Ok(out)
+}
+
+/// Marshal a list of `NodeData` into a Python dict keyed by absolute path.
+fn nodes_to_pydict<'py>(py: Python<'py>, nodes: &[NodeData]) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for node in nodes {
+        dict.set_item(&node.path, node_to_pydict(py, node)?)?;
+    }
+    Ok(dict)
 }
 
 /// Marshal a `NodeData` into a Python dict using xarray-friendly key names.

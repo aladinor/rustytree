@@ -15,10 +15,12 @@ for object-storage latency:
 
 xarray's PRs above all fight Python-side: `asyncio.gather` + thread-pool
 wrappers + `max_concurrency` semaphores reentering the GIL. `rustytree`
-will collapse that stack by owning the read path in Rust: one tokio runtime,
+collapses that stack by owning the read path in Rust: one tokio runtime,
 one FFI crossing with the GIL released, and `try_join_all` over async store
-operations under the hood. The plugin scaffold is in place today; the
-async walk has not yet been implemented.
+operations under the hood. The recursive multi-node walk is in place today
+(`_rustytree.open_datatree(...)` returns `dict[str, NodeData]` keyed by
+absolute group path); lazy chunk reads + `RustyBackendArray` ship in a
+follow-up PR.
 
 ## Primary target: icechunk-backed Zarr v3
 
@@ -143,6 +145,25 @@ not yet implemented):
 - ≥ 3× cold-cache speedup vs. `engine="zarr"` on a local icechunk DataTree.
 - ≥ 5× warm-cache speedup on the same.
 - ≥ 5× speedup on a 100-group vanilla Zarr v3 store on remote S3.
+
+### Current measurements
+
+| Target | Engine | Wall time | Speedup |
+| --- | --- | --- | --- |
+| KLOT-xradar (local icechunk, 12 groups, warm-cache) | `xr.open_datatree(..., engine="zarr", consolidated=False)` | 213.3 ms | — |
+| KLOT-xradar (local icechunk, 12 groups, warm-cache) | `_rustytree.open_datatree(...)` (recursive walk) | 81.5 ms | **2.62×** |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `xr.open_datatree(session.store, engine="zarr", consolidated=False)` | 50,370 ms | — |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `_rustytree.open_datatree(...)` (recursive walk) | 1,557 ms | **32.4×** |
+
+The S3 win is dominated by cross-group parallelism: xarray opens 107
+groups sequentially through `IcechunkStore`'s `SyncMixin`, paying ~470 ms
+per group for the metadata round-trip. The recursive walk fans them out
+through one tokio runtime with `try_join_all` and a 32-permit semaphore,
+holding ~32 in-flight metadata GETs at a time.
+
+Per-array eager opens (today's `open_single` opens every array to
+populate `VarMeta`) are the ceiling on further wins — the lazy
+`BackendArray` PR removes that cost from the open path entirely.
 
 ## Lazy chunk reads
 

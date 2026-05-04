@@ -13,6 +13,28 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Recursive multi-node walk ([#12]): `_rustytree.open_datatree` now
+  returns a Python `dict[str, NodeData]` keyed by absolute group path
+  rather than a single root `NodeData`. The walk discovers every
+  descendant group beneath the requested root with `try_join_all` over
+  sibling subtrees (a recursive async function pinned via `Box::pin`),
+  then fans out per-group metadata fetches with a second `try_join_all`.
+  A `tokio::sync::Semaphore` (default 32 permits, exposed as the
+  `max_concurrency=` kwarg) caps in-flight `Group::async_open` calls so
+  cold-cache object-store walks don't open more sockets than the client
+  can pipeline. Results are pre-order so `xr.DataTree.from_dict`
+  consumers see parents before children. Collapses the per-group
+  `Repository::open` + per-group PyO3 boundary crossing that previously
+  forced callers to loop in Python — one `Repository::open` covers the
+  whole walk. Validated against the local KLOT-xradar icechunk repo
+  (12 groups): 81.5 ms recursive walk vs 213.3 ms `xr.open_datatree(...,
+  engine="zarr")` warm-cache → **2.62×**. Validated against
+  `s3://nexrad-arco/KLOT` (107 groups, anon, cold-cache): 1.56 s
+  recursive walk vs 50.4 s xarray → **32.4×**. New `multilevel_zarr_store`
+  pytest fixture (4 groups, 3 levels) plus 6 new tests in
+  `tests/test_walk.py` covering all-groups discovery, per-node
+  variables, attrs round-trip, subtree-rooted walks, and
+  `max_concurrency=` kwarg plumbing.
 - icechunk-on-S3 ([#11]): `_rustytree.open_datatree` now opens icechunk
   repositories that live on S3 (e.g. the public `s3://nexrad-arco/KLOT`).
   A single HEAD on `<prefix>/repo` distinguishes icechunk vs vanilla
@@ -123,3 +145,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#9]: https://github.com/aladinor/rustytree/pull/9
 [#10]: https://github.com/aladinor/rustytree/pull/10
 [#11]: https://github.com/aladinor/rustytree/pull/11
+[#12]: https://github.com/aladinor/rustytree/pull/12
