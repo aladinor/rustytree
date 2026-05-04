@@ -12,9 +12,21 @@ repository = "https://github.com/aladinor/rustytree"
 name = "_rustytree"
 crate-type = ["cdylib"]
 
+[features]
+# `extension-module` (default-on) keeps cargo test/build from linking
+# libpython — pyo3 expects the runtime Python to supply it. Trade-off:
+# Rust unit tests can't call `Python::initialize/attach` (we cover that
+# behaviour via pytest in `tests/`).
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
-# pyo3 only — async stack (tokio, zarrs, object_store) lands in Phase 2.
-pyo3 = { version = "0.22", features = ["extension-module"] }
+# Async runtime + error machinery. zarrs, icechunk, and object_store land in
+# the next PR (the actual hierarchy walk).
+pyo3 = { version = "0.28" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+futures = "0.3"
+thiserror = "2"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -23,17 +35,6 @@ unwrap_used = "warn"
 # `#[pyfunction]` macro expansion includes `.into()` conversions on `PyErr` that
 # clippy::pedantic flags as useless. Known PyO3 false positive — allow it.
 useless_conversion = "allow"
-
-[lints.rust]
-# TODO(phase-2): remove when PyO3 bumps to 0.23+ alongside icechunk + zarrs.
-#
-# Edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default. PyO3 0.22's
-# `#[pyfunction]` expands to an `unsafe fn` trampoline that calls unsafe ops
-# without an enclosing `unsafe {}` block (fixed in PyO3 0.23+). The allow is
-# scoped to suppress warnings inside macro-generated `unsafe fn` bodies —
-# rustytree's own source has no `unsafe fn`, so we don't lose safety hygiene
-# on code we author.
-unsafe_op_in_unsafe_fn = "allow"
 
 [profile.release]
 opt-level = 3

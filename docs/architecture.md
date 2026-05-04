@@ -63,9 +63,9 @@ Detection cues for paths: presence of `<root>/refs/` and `<root>/snapshots/`
 
 ## Module map (target layout)
 
-Today only `src/lib.rs` and `python/rustytree/{__init__.py, backend.py}`
-exist. The layout below is the target once the async walk and decoding
-work lands.
+Today `src/lib.rs`, `src/runtime.rs`, `src/error.rs`, and
+`python/rustytree/{__init__.py, backend.py}` exist. The remaining modules
+in the layout below land once the async walk and decoding work happens.
 
 ```
 rustytree/

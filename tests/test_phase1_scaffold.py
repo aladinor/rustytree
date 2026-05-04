@@ -22,7 +22,7 @@ def test_rust_extension_importable() -> None:
 def test_rust_open_datatree_stub_raises() -> None:
     from rustytree._rustytree import open_datatree
 
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+    with pytest.raises(NotImplementedError, match="not yet implemented"):
         open_datatree("file:///tmp/does-not-matter")
 
 
