@@ -13,6 +13,18 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- S3 support for vanilla Zarr v3 ([#10]): `_rustytree.open_datatree`
+  accepts `s3://bucket` and `s3://bucket/prefix` URLs, building the store
+  via `object_store::aws::AmazonS3Builder` (wrapped in
+  `zarrs_object_store::AsyncObjectStore`). New `storage_options=` kwarg
+  threads fsspec/xarray-style credentials through (`region`, `endpoint`,
+  `access_key_id`, `secret_access_key`, `session_token`, `allow_http`,
+  `skip_signature` / `anon`). Unknown keys are rejected so typos surface
+  as a clear `ValueError`. New module `src/url.rs` parses the input into
+  a `StoreSpec` enum so future schemes (`gs://`, `az://`, `http(s)://`,
+  icechunk-on-S3) can be added without touching the dispatch site.
+  Cargo: `zarrs_object_store` gains the `aws` feature. 9 new cargo
+  unit tests for URL parsing + 4 new pytest tests for the dispatch.
 - icechunk dispatch on local filesystem ([#9]): `_rustytree.open_datatree`
   now auto-detects an on-disk icechunk repository (presence of a `repo`
   manifest file + `snapshots/` directory) and routes through
@@ -97,3 +109,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#7]: https://github.com/aladinor/rustytree/pull/7
 [#8]: https://github.com/aladinor/rustytree/pull/8
 [#9]: https://github.com/aladinor/rustytree/pull/9
+[#10]: https://github.com/aladinor/rustytree/pull/10

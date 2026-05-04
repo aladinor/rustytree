@@ -64,7 +64,7 @@ Detection cues for paths: presence of `<root>/refs/` and `<root>/snapshots/`
 ## Module map (target layout)
 
 Today `src/lib.rs`, `src/runtime.rs`, `src/error.rs`, `src/store.rs`,
-`src/icechunk_store.rs`, `src/node.rs`, `src/walk.rs`, and
+`src/icechunk_store.rs`, `src/url.rs`, `src/node.rs`, `src/walk.rs`, and
 `python/rustytree/{__init__.py, backend.py}` exist. The remaining modules
 in the layout below (`src/glob.rs`, `src/array.rs`,
 `python/rustytree/_array.py`, `python/rustytree/_decode.py`) land in

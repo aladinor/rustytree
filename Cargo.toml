@@ -36,7 +36,7 @@ thiserror = "2"
 # `LocalFileSystem` in the underlying object_store.
 zarrs = { version = "0.22", features = ["async"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
-zarrs_object_store = { version = "0.6", features = ["fs"] }
+zarrs_object_store = { version = "0.6", features = ["fs", "aws"] }
 serde_json = "1"
 
 # icechunk = transactional Zarr v3 storage layer. `zarrs_icechunk` wraps an
