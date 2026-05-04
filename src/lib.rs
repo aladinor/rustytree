@@ -75,7 +75,20 @@ fn open_datatree<'py>(
             let store = match &spec {
                 StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
                 StoreSpec::S3 { bucket, prefix } => {
-                    store::build_vanilla_s3(bucket, prefix, &options)?
+                    // Probe for icechunk's on-prefix layout (one HEAD on
+                    // `<prefix>/repo`) before picking the backend. Same
+                    // auto-detect contract as the local-fs path.
+                    if store::s3_is_icechunk(bucket, prefix, &options).await? {
+                        icechunk_store::open_s3_icechunk(
+                            bucket,
+                            prefix,
+                            branch.as_deref().unwrap_or("main"),
+                            &options,
+                        )
+                        .await?
+                    } else {
+                        store::build_vanilla_s3(bucket, prefix, &options)?
+                    }
                 }
             };
             walk::open_single(&store, group_path).await

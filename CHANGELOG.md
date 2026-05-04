@@ -13,6 +13,18 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- icechunk-on-S3 ([#11]): `_rustytree.open_datatree` now opens icechunk
+  repositories that live on S3 (e.g. the public `s3://nexrad-arco/KLOT`).
+  A single HEAD on `<prefix>/repo` distinguishes icechunk vs vanilla
+  layouts; icechunk paths route through `icechunk::storage::new_s3_storage`
+  + `Repository::open` + `readonly_session(BranchTipRef)` →
+  `AsyncIcechunkStore`. Same `storage_options` keys as the vanilla path
+  (`region`, `endpoint`, `access_key_id`, `secret_access_key`,
+  `session_token`, `allow_http`, `skip_signature` / `anon`); icechunk's
+  `S3Options` and `S3Credentials` are constructed from them. Network-
+  gated pytest smoke `test_open_nexrad_arco_klot_anon_s3` (opt-in via
+  `RUSTYTREE_S3_SMOKE=1`). Validated end-to-end against the real
+  `s3://nexrad-arco/KLOT` (107 groups; root opens in ~760 ms).
 - S3 support for vanilla Zarr v3 ([#10]): `_rustytree.open_datatree`
   accepts `s3://bucket` and `s3://bucket/prefix` URLs, building the store
   via `object_store::aws::AmazonS3Builder` (wrapped in
@@ -110,3 +122,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#8]: https://github.com/aladinor/rustytree/pull/8
 [#9]: https://github.com/aladinor/rustytree/pull/9
 [#10]: https://github.com/aladinor/rustytree/pull/10
+[#11]: https://github.com/aladinor/rustytree/pull/11
