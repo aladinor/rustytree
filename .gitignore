@@ -1,0 +1,43 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+build/
+dist/
+
+# Maturin / extension artifacts inside the source tree
+python/rustytree/*.so
+python/rustytree/*.dylib
+python/rustytree/*.pyd
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.envrc
