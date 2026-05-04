@@ -41,3 +41,6 @@ Thumbs.db
 # Local env
 .env
 .envrc
+
+# Local planning notes (per-developer; not part of repo)
+plans/

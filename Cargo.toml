@@ -1,0 +1,31 @@
+[package]
+name = "rustytree"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["Alfonso Ladino <alfonso@atmoscale.ai>"]
+description = "Rust-backed xarray DataTree backend for fast Zarr access from object storage"
+repository = "https://github.com/aladinor/rustytree"
+
+[lib]
+name = "_rustytree"
+crate-type = ["cdylib"]
+
+[dependencies]
+# pyo3 only — async stack (tokio, zarrs, object_store) lands in Phase 2.
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "deny", priority = -1 }
+unwrap_used = "warn"
+# `#[pyfunction]` macro expansion includes `.into()` conversions on `PyErr` that
+# clippy::pedantic flags as useless. Known PyO3 false positive — allow it.
+useless_conversion = "allow"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
