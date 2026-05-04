@@ -20,10 +20,6 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 /// Panics if the runtime cannot be constructed (e.g. the OS refuses to spawn
 /// the worker thread pool). This is unrecoverable; the only sensible response
 /// is to surface it as a panic and let Python translate it into `PanicException`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the upcoming async hierarchy walk PR")
-)]
 pub(crate) fn handle() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         Builder::new_multi_thread()

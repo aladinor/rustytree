@@ -21,12 +21,23 @@ default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-# Async runtime + error machinery. zarrs, icechunk, and object_store land in
-# the next PR (the actual hierarchy walk).
 pyo3 = { version = "0.28" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 futures = "0.3"
 thiserror = "2"
+
+# Zarr v3 reader stack. Remote object_store backends (S3/GCS/Azure/HTTP) and
+# the icechunk + zarrs_icechunk pair land in the follow-up that adds the
+# icechunk store dispatch. This PR is local-filesystem + vanilla v3 only.
+#
+# `object_store` is reached through `zarrs_object_store::object_store` (re-
+# exported) so we don't have to track its semver-incompatible version
+# bumps separately. The `fs` feature on `zarrs_object_store` enables
+# `LocalFileSystem` in the underlying object_store.
+zarrs = { version = "0.22", features = ["async"] }
+zarrs_storage = { version = "0.4", features = ["async"] }
+zarrs_object_store = { version = "0.6", features = ["fs"] }
+serde_json = "1"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

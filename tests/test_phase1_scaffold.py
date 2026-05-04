@@ -19,13 +19,6 @@ def test_rust_extension_importable() -> None:
     assert callable(open_datatree)
 
 
-def test_rust_open_datatree_stub_raises() -> None:
-    from rustytree._rustytree import open_datatree
-
-    with pytest.raises(NotImplementedError, match="not yet implemented"):
-        open_datatree("file:///tmp/does-not-matter")
-
-
 def test_xarray_engine_registered() -> None:
     engines = xr.backends.list_engines()
     assert "rustytree" in engines

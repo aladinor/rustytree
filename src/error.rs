@@ -18,7 +18,6 @@ use pyo3::prelude::*;
 use thiserror::Error;
 
 /// Result alias used throughout the Rust crate.
-#[expect(dead_code, reason = "wired up by the upcoming async hierarchy walk PR")]
 pub(crate) type Result<T> = std::result::Result<T, RustytreeError>;
 
 /// Top-level error type for rustytree's Rust core.
