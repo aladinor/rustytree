@@ -11,7 +11,7 @@
 Requirements:
 
 - Rust 1.91.1+ (matches `Cargo.toml` `rust-version`)
-- Python 3.10+
+- Python 3.12+ (pinned by `zarr>=3.0`'s upstream `requires-python`)
 - `uv` (recommended) or `pip` + a virtualenv
 
 ```bash

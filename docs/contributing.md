@@ -21,7 +21,7 @@ cargo test
 
 CI runs the same chain on every push to `main` and every pull request
 ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) against Python
-3.10 and 3.12.
+3.12.
 
 ## Branching and PR workflow
 
