@@ -13,6 +13,12 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Async runtime + error scaffolding ([#6]): `src/runtime.rs` exposes a
+  process-global `tokio` multi-threaded runtime via `OnceLock`;
+  `src/error.rs` defines `RustytreeError` (thiserror enum) with a
+  `From<RustytreeError> for PyErr` mapping each variant to the right
+  Python exception (`OSError`, `KeyError`, `ValueError`, `RuntimeError`).
+  No callers yet; the upcoming hierarchy-walk PR consumes them.
 - Project scaffold ([#1]): maturin-built PyO3 cdylib registered as an
   xarray backend; `xr.open_datatree(engine="rustytree")` resolves to a
   stub raising `NotImplementedError` until the walk is implemented.
@@ -28,6 +34,14 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- Dependency bump ([#6]): `pyo3` 0.22 → 0.28. Removes the
+  `unsafe_op_in_unsafe_fn = "allow"` workaround that PyO3 0.22 needed
+  under edition 2024. Adds `tokio` (rt-multi-thread + sync), `futures`,
+  and `thiserror` to support the upcoming hierarchy walk.
+- Cargo features restructured ([#6]): `extension-module` is now a named
+  feature (default-on) instead of being hard-coded into the `pyo3` dep.
+  This lets `cargo test` reuse the same wheel-style link configuration
+  the runtime uses, so unit tests don't need `LD_LIBRARY_PATH`.
 - Toolchain bumped ([#3]): `rust-version` 1.75 → 1.91.1, `edition`
   2021 → 2024 (matches `icechunk`'s MSRV ahead of the next milestone).
 - Python floor raised ([#5]): `requires-python` `>=3.10` → `>=3.12` to
@@ -47,3 +61,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#3]: https://github.com/aladinor/rustytree/pull/3
 [#4]: https://github.com/aladinor/rustytree/pull/4
 [#5]: https://github.com/aladinor/rustytree/pull/5
+[#6]: https://github.com/aladinor/rustytree/pull/6

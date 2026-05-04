@@ -49,7 +49,7 @@ rustytree = "rustytree.backend:RustytreeBackendEntrypoint"
 [tool.maturin]
 module-name = "rustytree._rustytree"
 python-source = "python"
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

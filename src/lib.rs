@@ -1,18 +1,22 @@
-//! rustytree — Rust-backed xarray `DataTree` backend (Phase 1 scaffold).
+//! rustytree — Rust-backed xarray `DataTree` backend (scaffold + async runtime).
 //!
-//! Phase 1 only proves that `xr.open_datatree(engine="rustytree")` resolves
-//! through the entry point and returns a controlled `NotImplementedError`.
-//! The async walk + zarrs integration land in Phase 2.
+//! `xr.open_datatree(engine="rustytree")` resolves through this module's
+//! `open_datatree` `PyO3` function. The hierarchy walk + zarrs / icechunk
+//! integration are not yet implemented; the function currently raises
+//! `NotImplementedError`.
 
 use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 
-/// Phase 2 entry point. Returns `NotImplementedError` until the async walk lands.
+mod error;
+mod runtime;
+
+/// Returns `NotImplementedError` until the async hierarchy walk is wired up.
 #[pyfunction]
-fn open_datatree(url: &str) -> PyResult<PyObject> {
+fn open_datatree(url: &str) -> PyResult<Py<PyAny>> {
     let _ = url;
     Err(PyNotImplementedError::new_err(
-        "rustytree.open_datatree lands in Phase 2",
+        "rustytree.open_datatree: async hierarchy walk not yet implemented",
     ))
 }
 
