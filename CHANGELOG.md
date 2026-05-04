@@ -13,21 +13,37 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
-- Project scaffold ([#1], Phase 1): maturin-built PyO3 cdylib registered as
-  an xarray backend; `xr.open_datatree(engine="rustytree")` resolves to a
-  stub raising `NotImplementedError` until Phase 2.
-- 9-test pytest suite locking the plugin-discovery contract.
-- `[lints.clippy]` policy: `pedantic = warn`, `perf = deny`, `unwrap_used = warn`.
-- `CHANGELOG.md` (this file), `README.md`, and `docs/` folder ([#4], Phase 1.6):
+- Project scaffold ([#1]): maturin-built PyO3 cdylib registered as an
+  xarray backend; `xr.open_datatree(engine="rustytree")` resolves to a
+  stub raising `NotImplementedError` until the walk is implemented.
+- 9-test pytest suite locking the plugin-discovery contract ([#1]).
+- `[lints.clippy]` policy: `pedantic = warn`, `perf = deny`,
+  `unwrap_used = warn` ([#1]).
+- `CHANGELOG.md`, `README.md`, and `docs/` folder ([#4]):
   `architecture.md`, `usage.md`, `contributing.md`, `release-process.md`.
-- `LICENSE-MIT` and `LICENSE-APACHE` ([#4]).
+- CI workflow ([#5]): `.github/workflows/ci.yml` runs `cargo fmt`,
+  `cargo clippy -D warnings`, `cargo test`, `maturin develop`, and
+  `pytest` against Python 3.12 on every push to `main` and every pull
+  request.
 
 ### Changed
 
-- Toolchain bumped ([#3], Phase 1.5): `rust-version` 1.75 → 1.91.1,
-  `edition` 2021 → 2024 (icechunk's MSRV ahead of Phase 2).
+- Toolchain bumped ([#3]): `rust-version` 1.75 → 1.91.1, `edition`
+  2021 → 2024 (matches `icechunk`'s MSRV ahead of the next milestone).
+- Python floor raised ([#5]): `requires-python` `>=3.10` → `>=3.12` to
+  match `zarr>=3.0`'s upstream Python requirement (3.0.x and 3.1.x
+  versions are yanked or require Python ≥ 3.11; 3.2.0 requires 3.12).
+  Classifiers updated; Python 3.10 / 3.11 entries removed.
+- Project license switched from `MIT OR Apache-2.0` to
+  `AGPL-3.0-or-later` ([#5]). If you use, modify, or run rustytree —
+  including over a network as part of a hosted service — you must make
+  the corresponding source code available under the same license to
+  anyone interacting with it. See `LICENSE` section 13 for the
+  network-use clause. The previous `LICENSE-MIT` and `LICENSE-APACHE`
+  files are removed.
 
 [Unreleased]: https://github.com/aladinor/rustytree/compare/...HEAD
 [#1]: https://github.com/aladinor/rustytree/pull/1
 [#3]: https://github.com/aladinor/rustytree/pull/3
 [#4]: https://github.com/aladinor/rustytree/pull/4
+[#5]: https://github.com/aladinor/rustytree/pull/5

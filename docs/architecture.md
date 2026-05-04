@@ -17,8 +17,8 @@ xarray's PRs above all fight Python-side: `asyncio.gather` + thread-pool
 wrappers + `max_concurrency` semaphores reentering the GIL. `rustytree`
 will collapse that stack by owning the read path in Rust: one tokio runtime,
 one FFI crossing with the GIL released, and `try_join_all` over async store
-operations under the hood. Phase 1 / Phase 1.5 ship only the plugin scaffold;
-the walk lands in Phase 2.
+operations under the hood. The plugin scaffold is in place today; the
+async walk has not yet been implemented.
 
 ## Primary target: icechunk-backed Zarr v3
 
@@ -30,7 +30,8 @@ Reading icechunk requires icechunk's storage layer.
 The official Rust adapter [`zarrs_icechunk`](https://github.com/zarrs/zarrs_icechunk)
 exposes `AsyncIcechunkStore::new(session)` returning an
 `AsyncReadableStorageTraits` impl. `rustytree` will land on
-`icechunk = "2"`, `zarrs = "0.22"`, `zarrs_icechunk = "0.5"` in Phase 2.
+`icechunk = "2"`, `zarrs = "0.22"`, `zarrs_icechunk = "0.5"` in the next
+implementation milestone.
 
 icechunk reframes the bottleneck profile:
 
@@ -41,7 +42,7 @@ icechunk reframes the bottleneck profile:
 - The N-groups × RTT problem (#10579) shrinks to N-groups × *parse* —
   parallelizable in Rust without GIL ping-pong.
 - Per-coord round-trips and CF datetime decoding round-trips should remain
-  real wins (to be confirmed by Phase 9 benchmarks).
+  real wins (to be confirmed by the eventual benchmark suite).
 
 ## Polymorphic engine
 
@@ -60,10 +61,11 @@ protocol).
 Detection cues for paths: presence of `<root>/refs/` and `<root>/snapshots/`
 (icechunk layout), or an `icechunk://` URL prefix as explicit override.
 
-## Module map (post-Phase 2)
+## Module map (target layout)
 
 Today only `src/lib.rs` and `python/rustytree/{__init__.py, backend.py}`
-exist. The layout below is the Phase 2 target.
+exist. The layout below is the target once the async walk and decoding
+work lands.
 
 ```
 rustytree/
@@ -129,7 +131,8 @@ _rustytree.open_datatree(...)
 
 ## Performance targets
 
-Validated by Phase 9 benchmarks (`benchmarks/bench_open_datatree.py`):
+To be validated by the benchmark suite (`benchmarks/bench_open_datatree.py`,
+not yet implemented):
 
 - ≥ 3× cold-cache speedup vs. `engine="zarr"` on a local icechunk DataTree.
 - ≥ 5× warm-cache speedup on the same.

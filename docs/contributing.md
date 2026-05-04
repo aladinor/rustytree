@@ -19,8 +19,9 @@ cargo test
 .venv/bin/pytest tests/
 ```
 
-CI will run the same chain on every push and pull request once the CI
-workflow lands (Phase 1.7).
+CI runs the same chain on every push to `main` and every pull request
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) against Python
+3.12.
 
 ## Branching and PR workflow
 
@@ -36,11 +37,17 @@ workflow lands (Phase 1.7).
 - PR base is always `main` unless deliberately stacking on another open PR
   (and even then, retarget to `main` before merge).
 
-## Per-phase audit chain
+## Per-PR audit
 
-For any PR touching Rust source or build configuration, run the rust-* skills
-plus `/simplify`, surface findings in a PR comment, and apply fixes before
-merge. See the saved phase workflow for the full sequence.
+For any PR touching Rust source or build configuration:
+
+1. Confirm the validation gates above all pass locally.
+2. Re-read the diff for: unjustified `unsafe`, swallowed errors, redundant
+   clones, premature abstractions, dead code.
+3. If you used AI tooling to draft the PR, surface the review findings in a
+   PR comment and apply or rebut each one.
+
+A missing audit comment is a request-changes item on substantive Rust PRs.
 
 ## CHANGELOG
 

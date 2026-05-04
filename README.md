@@ -11,12 +11,10 @@ dominant cost.
 
 ## Status
 
-**Pre-alpha.** Phase 1 + Phase 1.5 shipped — only plugin discovery is wired
-up; calling `xr.open_datatree(..., engine="rustytree")` raises
-`NotImplementedError` until Phase 2 lands the real walk.
-
-Track progress in [`CHANGELOG.md`](CHANGELOG.md). Architecture and design
-choices live in [`docs/architecture.md`](docs/architecture.md).
+**Pre-alpha.** Currently only plugin discovery is wired up; calling
+`xr.open_datatree(..., engine="rustytree")` raises `NotImplementedError`
+until the async hierarchy walk lands. See [`CHANGELOG.md`](CHANGELOG.md)
+for what has shipped.
 
 ## Documentation
 
@@ -25,14 +23,19 @@ choices live in [`docs/architecture.md`](docs/architecture.md).
 - [`docs/usage.md`](docs/usage.md) — how to build it, run the test suite, and
   the planned API surface.
 - [`docs/contributing.md`](docs/contributing.md) — branching, commit
-  conventions, audit chain, validation gates.
-- [`docs/release-process.md`](docs/release-process.md) — versioning,
-  CHANGELOG roll, tag + PyPI workflow.
+  conventions, validation gates, per-PR audit.
+- [`docs/release-process.md`](docs/release-process.md) — versioning, tag,
+  CHANGELOG roll.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) **or** [Apache-2.0](LICENSE-APACHE).
-You may choose either.
+[GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
+
+If you use, modify, or run this software — including over a network as part
+of a hosted service — you must make the corresponding source code available
+under the same license to anyone interacting with it. See section 13 of the
+LICENSE for the network-use clause. If you need different terms (e.g. for
+proprietary embedding), open an issue to discuss.
 
 ## Acknowledgements
 

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs for the same branch when new commits land.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Cargo gates run once on stable Rust. Cheap; no Python needed.
+  cargo:
+    name: cargo (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --locked
+
+  # Python integration: build the cdylib via maturin and run pytest against
+  # the supported interpreter range. Each matrix cell rebuilds the extension
+  # because PyO3 cdylibs are interpreter-specific.
+  python:
+    name: pytest (Python ${{ matrix.python-version }})
+    needs: cargo
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Keyed by Python version so each matrix cell gets its own cache.
+          key: py-${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v4
+      - name: Set up venv and install maturin
+        run: |
+          uv venv --python "${{ matrix.python-version }}"
+          uv pip install --python .venv/bin/python maturin
+      - name: Build extension (maturin develop)
+        run: .venv/bin/maturin develop
+      - name: Install dev extras
+        run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: pytest
+        run: .venv/bin/pytest tests/ -v
