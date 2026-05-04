@@ -1,8 +1,8 @@
 [package]
 name = "rustytree"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
 authors = ["Alfonso Ladino <alfonso@atmoscale.ai>"]
 description = "Rust-backed xarray DataTree backend for fast Zarr access from object storage"
@@ -23,6 +23,13 @@ unwrap_used = "warn"
 # `#[pyfunction]` macro expansion includes `.into()` conversions on `PyErr` that
 # clippy::pedantic flags as useless. Known PyO3 false positive — allow it.
 useless_conversion = "allow"
+
+[lints.rust]
+# Edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default. PyO3 0.22's
+# `#[pyfunction]` macro emits unsafe-op-in-safe-fn at the param-extraction
+# site, which is fixed in PyO3 0.23+. Keep this allow until Phase 2 bumps
+# PyO3 (and numpy) to 0.28 along with the icechunk + zarrs deps.
+unsafe_op_in_unsafe_fn = "allow"
 
 [profile.release]
 opt-level = 3
