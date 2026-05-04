@@ -45,6 +45,12 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- CI speedup ([#8]): the "install dev extras" step previously ran
+  `uv pip install -e ".[dev]"`, which rebuilt the cdylib on top of the
+  `maturin develop` step, doubling the per-matrix-cell build time. The
+  step now installs the `[dev]` deps directly (`pytest`, `pytest-cov`,
+  `zarr>=3.0`, `ruff`) so `maturin develop` is the only build. ~80s
+  saved per cell.
 - Dependency additions ([#7]): `zarrs = "0.22"` (with `async`),
   `zarrs_storage = "0.4"` (with `async`), `zarrs_object_store = "0.6"`
   (with `fs`), `serde_json = "1"`. icechunk + remote `object_store`
@@ -78,3 +84,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#5]: https://github.com/aladinor/rustytree/pull/5
 [#6]: https://github.com/aladinor/rustytree/pull/6
 [#7]: https://github.com/aladinor/rustytree/pull/7
+[#8]: https://github.com/aladinor/rustytree/pull/8
