@@ -1,0 +1,63 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rustytree"
+version = "0.1.0"
+description = "Rust-backed xarray DataTree backend for fast Zarr access from object storage"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT OR Apache-2.0" }
+authors = [
+    { name = "Alfonso Ladino", email = "alfonso@atmoscale.ai" },
+]
+keywords = ["xarray", "zarr", "datatree", "rust", "object-storage"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "xarray>=2024.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "zarr>=3.0",
+    "ruff>=0.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/aladinor/rustytree"
+Repository = "https://github.com/aladinor/rustytree"
+
+# xarray plugin discovery hook. With this, `xr.open_datatree(url, engine="rustytree")`
+# will resolve to RustytreeBackendEntrypoint via importlib.metadata.entry_points.
+[project.entry-points."xarray.backends"]
+rustytree = "rustytree.backend:RustytreeBackendEntrypoint"
+
+[tool.maturin]
+module-name = "rustytree._rustytree"
+python-source = "python"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
