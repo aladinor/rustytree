@@ -79,3 +79,30 @@ def test_open_ktwx_root() -> None:
     assert node["path"] == "/"
     assert isinstance(node["attrs"], dict)
     assert isinstance(node["vars"], list)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUSTYTREE_S3_SMOKE") != "1",
+    reason="Network-gated S3 smoke test (set RUSTYTREE_S3_SMOKE=1 to run)",
+)
+def test_open_nexrad_arco_klot_anon_s3() -> None:
+    """Open the public anonymous icechunk repo on AWS.
+
+    Exercises the `s3://`-icechunk dispatch end-to-end:
+      1. URL parsing produces `StoreSpec::S3 {bucket, prefix}`.
+      2. `s3_is_icechunk` HEADs `KLOT/repo` → True.
+      3. `open_s3_icechunk` calls icechunk's `new_s3_storage` +
+         `Repository::open` + `readonly_session("main")` against AWS.
+      4. The walk reads the root group's `zarr.json` from the icechunk
+         manifest and returns a structurally valid `NodeData`.
+
+    Network-gated because it hits real AWS; opt-in via
+    `RUSTYTREE_S3_SMOKE=1`.
+    """
+    node = open_datatree(
+        "s3://nexrad-arco/KLOT",
+        storage_options={"region": "us-east-1", "anon": True},
+    )
+    assert node["path"] == "/"
+    assert isinstance(node["attrs"], dict)
+    assert isinstance(node["vars"], list)

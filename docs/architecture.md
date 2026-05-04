@@ -51,15 +51,18 @@ polymorphically at the store boundary, the same way `engine="zarr"` does
 today (icechunk's Python `IcechunkStore` implements zarr-python's Store
 protocol).
 
-| `filename_or_obj`                              | Rust store impl                              |
+| `filename_or_obj` | Rust store impl |
 | --- | --- |
-| Python `IcechunkStore` / `Session`             | unwrap to icechunk `Session` → `AsyncIcechunkStore` |
-| Path/URL pointing at an icechunk repo          | `Repository::open` → `readonly_session` → `AsyncIcechunkStore` |
-| Path/URL pointing at a plain Zarr v3 store     | `zarrs_object_store::AsyncObjectStore` |
-| `MutableMapping` / fsspec object               | fall back to `zarrs_object_store` |
+| Local path to an icechunk repo (auto-detected) | `Repository::open` → `readonly_session` → `AsyncIcechunkStore` |
+| `s3://` URL to an icechunk repo (auto-detected) | `icechunk::storage::new_s3_storage` → `Repository::open` → `AsyncIcechunkStore` |
+| Local or `s3://` URL to a plain Zarr v3 store | `zarrs_object_store::AsyncObjectStore` |
+| Python `IcechunkStore` / `Session` (later) | unwrap to icechunk `Session` → `AsyncIcechunkStore` |
+| `MutableMapping` / fsspec object (later) | fall back to `zarrs_object_store` |
 
-Detection cues for paths: presence of `<root>/refs/` and `<root>/snapshots/`
-(icechunk layout), or an `icechunk://` URL prefix as explicit override.
+Detection cues:
+- **Local**: `<root>/repo` file + `<root>/snapshots/` directory → icechunk.
+- **S3**: one HEAD on `<prefix>/repo` → 200 means icechunk, 404 means vanilla Zarr v3.
+- **GCS / Azure / HTTP**: same HEAD-probe pattern; lands with the next remote-stores PR.
 
 ## Module map (target layout)
 
