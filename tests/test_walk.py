@@ -1,4 +1,10 @@
-"""Single-group walk against a known local Zarr v3 fixture."""
+"""Recursive walk against a local Zarr v3 fixture.
+
+The fixture is single-level (root + 2 arrays, no child groups), so
+the recursive walk surfaces just `{"/": ...}`. Multi-level recursion is
+exercised in `test_icechunk.py` against the icechunk fixture which has
+sweep groups.
+"""
 
 from __future__ import annotations
 
@@ -9,28 +15,29 @@ import pytest
 from rustytree._rustytree import open_datatree
 
 
-def test_open_root_returns_node_dict(tiny_zarr_store: Path) -> None:
-    node = open_datatree(str(tiny_zarr_store))
-
-    assert isinstance(node, dict)
-    assert set(node) == {"path", "attrs", "vars"}
-    assert node["path"] == "/"
+def test_open_returns_dict_keyed_by_path(tiny_zarr_store: Path) -> None:
+    tree = open_datatree(str(tiny_zarr_store))
+    assert isinstance(tree, dict)
+    assert "/" in tree
+    root = tree["/"]
+    assert set(root) == {"path", "attrs", "vars"}
+    assert root["path"] == "/"
 
 
 def test_root_attrs_round_trip(tiny_zarr_store: Path) -> None:
-    node = open_datatree(str(tiny_zarr_store))
-    assert node["attrs"] == {"title": "tiny"}
+    tree = open_datatree(str(tiny_zarr_store))
+    assert tree["/"]["attrs"] == {"title": "tiny"}
 
 
-def test_vars_listed_alphabetically_or_at_least_complete(tiny_zarr_store: Path) -> None:
-    node = open_datatree(str(tiny_zarr_store))
-    names = {var["name"] for var in node["vars"]}
+def test_vars_listed_complete(tiny_zarr_store: Path) -> None:
+    tree = open_datatree(str(tiny_zarr_store))
+    names = {var["name"] for var in tree["/"]["vars"]}
     assert names == {"temp", "mask"}
 
 
 def test_var_metadata_shape_and_dims(tiny_zarr_store: Path) -> None:
-    node = open_datatree(str(tiny_zarr_store))
-    by_name = {var["name"]: var for var in node["vars"]}
+    tree = open_datatree(str(tiny_zarr_store))
+    by_name = {var["name"]: var for var in tree["/"]["vars"]}
 
     temp = by_name["temp"]
     assert temp["dims"] == ["lat", "lon"]
@@ -51,8 +58,58 @@ def test_explicit_group_root_is_default(tiny_zarr_store: Path) -> None:
 
 
 def test_file_url_scheme_accepted(tiny_zarr_store: Path) -> None:
-    node = open_datatree(f"file://{tiny_zarr_store}")
-    assert node["path"] == "/"
+    tree = open_datatree(f"file://{tiny_zarr_store}")
+    assert "/" in tree
+
+
+def test_recursive_walk_finds_all_groups(multilevel_zarr_store: Path) -> None:
+    tree = open_datatree(str(multilevel_zarr_store))
+    assert set(tree) == {"/", "/volume_a", "/volume_a/sweep_0", "/volume_a/sweep_1"}
+
+
+def test_recursive_walk_each_node_has_right_vars(multilevel_zarr_store: Path) -> None:
+    tree = open_datatree(str(multilevel_zarr_store))
+
+    assert {v["name"] for v in tree["/"]["vars"]} == {"x"}
+    assert {v["name"] for v in tree["/volume_a"]["vars"]} == {"temp"}
+    assert {v["name"] for v in tree["/volume_a/sweep_0"]["vars"]} == {"dbz"}
+    assert {v["name"] for v in tree["/volume_a/sweep_1"]["vars"]} == {"dbz"}
+
+
+def test_recursive_walk_attrs_round_trip(multilevel_zarr_store: Path) -> None:
+    tree = open_datatree(str(multilevel_zarr_store))
+    assert tree["/"]["attrs"] == {"title": "multilevel"}
+    assert tree["/volume_a"]["attrs"] == {"id": "A"}
+    assert tree["/volume_a/sweep_0"]["attrs"] == {"angle": 0.5}
+    assert tree["/volume_a/sweep_1"]["attrs"] == {"angle": 1.5}
+
+
+def test_recursive_walk_subtree_rooted_at_group(multilevel_zarr_store: Path) -> None:
+    # Walking from /volume_a returns volume_a + its 2 sweeps; root and x
+    # don't appear.
+    subtree = open_datatree(str(multilevel_zarr_store), group="/volume_a")
+    assert set(subtree) == {"/volume_a", "/volume_a/sweep_0", "/volume_a/sweep_1"}
+
+
+def test_max_concurrency_kwarg_accepted(tiny_zarr_store: Path) -> None:
+    # Smoke: tree opens and matches the default-walk result regardless of
+    # the cap (the work fits inside any reasonable bound for a 1-group
+    # tree). Verifies the kwarg is plumbed through without affecting
+    # correctness.
+    a = open_datatree(str(tiny_zarr_store))
+    b = open_datatree(str(tiny_zarr_store), max_concurrency=1)
+    c = open_datatree(str(tiny_zarr_store), max_concurrency=128)
+    assert a == b == c
+
+
+def test_max_concurrency_one_does_not_deadlock_on_deep_tree(
+    multilevel_zarr_store: Path,
+) -> None:
+    # Regression: holding the semaphore permit across recursion would
+    # deadlock for any max_concurrency < tree depth. The 3-level
+    # multilevel fixture catches it; result must still be the full tree.
+    tree = open_datatree(str(multilevel_zarr_store), max_concurrency=1)
+    assert set(tree) == {"/", "/volume_a", "/volume_a/sweep_0", "/volume_a/sweep_1"}
 
 
 def test_missing_path_raises_oserror(tmp_path: Path) -> None:
@@ -67,8 +124,6 @@ def test_unsupported_scheme_rejected_clearly() -> None:
 
 
 def test_s3_unknown_storage_option_rejected() -> None:
-    # We don't actually open S3 here; the build_vanilla_s3 builder rejects
-    # unknown keys before any network call.
     with pytest.raises(ValueError, match="unknown s3 storage option"):
         open_datatree(
             "s3://example-bucket/store.zarr",

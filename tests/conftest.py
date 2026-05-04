@@ -60,6 +60,52 @@ def tiny_zarr_store(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def multilevel_zarr_store(tmp_path: Path) -> Path:
+    """A 3-level vanilla Zarr v3 store for exercising the recursive walk.
+
+    Layout::
+
+        store.zarr/                                         attrs: {"title": "multilevel"}
+            x        (n=4)        float64
+            volume_a/                                       attrs: {"id": "A"}
+                volume_a/temp     (n=4)  float64
+                volume_a/sweep_0/                           attrs: {"angle": 0.5}
+                    volume_a/sweep_0/dbz   (a=8, r=16)  float32
+                volume_a/sweep_1/                           attrs: {"angle": 1.5}
+                    volume_a/sweep_1/dbz   (a=8, r=16)  float32
+
+    Five groups total: `/`, `/volume_a`, `/volume_a/sweep_0`,
+    `/volume_a/sweep_1` (and the implicit array containers — those don't
+    show up as groups). The walk should surface 4 group nodes.
+    """
+    path = tmp_path / "store.zarr"
+    root = zarr.create_group(store=str(path), zarr_format=3)
+    root.attrs["title"] = "multilevel"
+    root.create_array("x", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",))[:] = (
+        np.arange(4, dtype=np.float64)
+    )
+
+    volume_a = root.create_group("volume_a")
+    volume_a.attrs["id"] = "A"
+    volume_a.create_array(
+        "temp", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
+    )[:] = np.arange(4, dtype=np.float64)
+
+    for i, angle in enumerate([0.5, 1.5]):
+        sweep = volume_a.create_group(f"sweep_{i}")
+        sweep.attrs["angle"] = angle
+        sweep.create_array(
+            "dbz",
+            shape=(8, 16),
+            dtype="float32",
+            chunks=(8, 16),
+            dimension_names=("azimuth", "range"),
+        )[:] = np.zeros((8, 16), dtype=np.float32)
+
+    return path
+
+
+@pytest.fixture
 def tiny_icechunk_repo(tmp_path: Path) -> Path:
     """Fresh icechunk repository with the same layout as ``tiny_zarr_store``."""
     path = tmp_path / "repo"
