@@ -55,12 +55,30 @@ def test_file_url_scheme_accepted(tiny_zarr_store: Path) -> None:
     assert node["path"] == "/"
 
 
-def test_unsupported_scheme_rejected_clearly() -> None:
-    with pytest.raises(NotImplementedError, match="local-filesystem"):
-        open_datatree("s3://bucket/store.zarr")
-
-
 def test_missing_path_raises_oserror(tmp_path: Path) -> None:
     missing = tmp_path / "nope.zarr"
     with pytest.raises(OSError):
         open_datatree(str(missing))
+
+
+def test_unsupported_scheme_rejected_clearly() -> None:
+    with pytest.raises(ValueError, match="unsupported URL scheme"):
+        open_datatree("gs://bucket/store.zarr")
+
+
+def test_s3_unknown_storage_option_rejected() -> None:
+    # We don't actually open S3 here; the build_vanilla_s3 builder rejects
+    # unknown keys before any network call.
+    with pytest.raises(ValueError, match="unknown s3 storage option"):
+        open_datatree(
+            "s3://example-bucket/store.zarr",
+            storage_options={"regin": "us-east-1"},
+        )
+
+
+def test_s3_invalid_bool_option_rejected() -> None:
+    with pytest.raises(ValueError, match="expects a boolean"):
+        open_datatree(
+            "s3://example-bucket/store.zarr",
+            storage_options={"anon": "maybe"},
+        )

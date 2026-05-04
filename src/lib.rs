@@ -1,13 +1,13 @@
 //! rustytree — Rust-backed xarray `DataTree` backend.
 //!
 //! `xr.open_datatree(engine="rustytree")` resolves through this module's
-//! `open_datatree` `PyO3` function. Today only local-filesystem vanilla
-//! Zarr v3 stores are supported, and only a single group's metadata is
-//! returned. Recursive multi-node walks, icechunk dispatch, and lazy chunk
-//! reads land in follow-up PRs.
+//! `open_datatree` `PyO3` function. Supported inputs today: local-filesystem
+//! paths (icechunk + vanilla Zarr v3) and `s3://` URLs (vanilla Zarr v3
+//! only — icechunk-on-S3 lands later). Only a single group's metadata is
+//! returned; recursive multi-node walks and lazy chunk reads ship in
+//! follow-up PRs.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
 
 use pyo3::Bound;
 use pyo3::IntoPyObjectExt;
@@ -21,18 +21,25 @@ mod icechunk_store;
 mod node;
 mod runtime;
 mod store;
+mod url;
 mod walk;
 
 use crate::error::Result;
 use crate::node::{NodeData, VarMeta};
+use crate::url::StoreSpec;
 
 /// Open a Zarr v3 store at `path` and return a metadata snapshot of the
 /// group at `group` (default `"/"`).
 ///
-/// `path` may point at either a vanilla Zarr v3 directory or an icechunk
-/// repository on local filesystem; rustytree auto-detects the layout.
-/// `branch` selects the icechunk branch (default `"main"`); it's silently
-/// ignored on the vanilla path.
+/// `path` may be a local-filesystem path, a `file://` URL, or an `s3://`
+/// URL. Local paths auto-detect between icechunk repositories and vanilla
+/// Zarr v3 directories. `branch` selects the icechunk branch (default
+/// `"main"`); silently ignored on non-icechunk paths.
+///
+/// `storage_options` accepts the standard fsspec/xarray-style keys for the
+/// chosen scheme. For `s3://`: `region`, `endpoint`, `access_key_id`,
+/// `secret_access_key`, `session_token`, `allow_http`, `skip_signature`
+/// (alias `anon`). Unknown keys are rejected so typos surface immediately.
 ///
 /// The returned dict has:
 ///
@@ -46,24 +53,31 @@ use crate::node::{NodeData, VarMeta};
 ///     ],
 /// }
 /// ```
-///
-/// Remote stores (`s3://`, `gs://`, ...) are not supported in this build;
-/// passing one yields `NotImplementedError`.
 #[pyfunction]
-#[pyo3(signature = (path, *, group = None, branch = None))]
+#[pyo3(signature = (path, *, group = None, branch = None, storage_options = None))]
 fn open_datatree<'py>(
     py: Python<'py>,
     path: &str,
     group: Option<&str>,
     branch: Option<&str>,
+    storage_options: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let path = parse_local_path(path)?;
+    let spec = url::parse_store_spec(path)?;
+    let options = storage_options
+        .map(parse_storage_options)
+        .transpose()?
+        .unwrap_or_default();
     let group_path = group.unwrap_or("/");
     let branch = branch.map(str::to_string);
 
     let node = py.detach(move || -> Result<NodeData> {
         runtime::handle().block_on(async {
-            let store = store::build_local_store(&path, branch.as_deref()).await?;
+            let store = match &spec {
+                StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
+                StoreSpec::S3 { bucket, prefix } => {
+                    store::build_vanilla_s3(bucket, prefix, &options)?
+                }
+            };
             walk::open_single(&store, group_path).await
         })
     })?;
@@ -71,20 +85,22 @@ fn open_datatree<'py>(
     node_to_pydict(py, &node)
 }
 
-/// Parse the `path` argument. Today: only local-filesystem paths or
-/// `file://` URLs. Remote URL schemes are rejected with
-/// `NotImplementedError` (the follow-up PR adds remote `object_store`
-/// dispatch).
-fn parse_local_path(input: &str) -> PyResult<PathBuf> {
-    if let Some(rest) = input.strip_prefix("file://") {
-        return Ok(PathBuf::from(rest));
+/// Convert a Python dict of `storage_options` into an owned
+/// `HashMap<String, String>`.
+///
+/// Values are passed through Python's `str()` so the user can write
+/// `{"anon": True}` or `{"timeout": 30}` instead of having to stringify
+/// themselves — matches the fsspec / xarray convention. The downstream
+/// per-key parsers (e.g. `apply_s3_option`) recognise `"True"` / `"False"`
+/// alongside `"true"` / `"false"` so the round-trip is lossless.
+fn parse_storage_options(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, String>> {
+    let mut out = HashMap::with_capacity(dict.len());
+    for (key, value) in dict.iter() {
+        let key: String = key.extract()?;
+        let value: String = value.str()?.extract()?;
+        out.insert(key, value);
     }
-    if input.contains("://") {
-        return Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
-            "rustytree.open_datatree: only local-filesystem paths are supported in this build; got {input}"
-        )));
-    }
-    Ok(PathBuf::from(input))
+    Ok(out)
 }
 
 /// Marshal a `NodeData` into a Python dict using xarray-friendly key names.
