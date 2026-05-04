@@ -25,10 +25,14 @@ unwrap_used = "warn"
 useless_conversion = "allow"
 
 [lints.rust]
+# TODO(phase-2): remove when PyO3 bumps to 0.23+ alongside icechunk + zarrs.
+#
 # Edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default. PyO3 0.22's
-# `#[pyfunction]` macro emits unsafe-op-in-safe-fn at the param-extraction
-# site, which is fixed in PyO3 0.23+. Keep this allow until Phase 2 bumps
-# PyO3 (and numpy) to 0.28 along with the icechunk + zarrs deps.
+# `#[pyfunction]` expands to an `unsafe fn` trampoline that calls unsafe ops
+# without an enclosing `unsafe {}` block (fixed in PyO3 0.23+). The allow is
+# scoped to suppress warnings inside macro-generated `unsafe fn` bodies —
+# rustytree's own source has no `unsafe fn`, so we don't lose safety hygiene
+# on code we author.
 unsafe_op_in_unsafe_fn = "allow"
 
 [profile.release]
