@@ -1,8 +1,13 @@
-//! Build a zarrs `AsyncReadableListableStorage` from a path or URL.
+//! Build a zarrs `AsyncReadableListableStorage` from a path.
 //!
-//! Today only local-filesystem inputs are supported; remote `object_store`
-//! backends (S3 / GCS / Azure / HTTP) and the icechunk dispatch (which
-//! produces an `AsyncIcechunkStore` instead) land in the follow-up PR.
+//! Auto-detects between an icechunk repository and a vanilla Zarr v3
+//! directory: the path is checked for icechunk's on-disk layout
+//! (`<root>/refs/` + `<root>/snapshots/`) and routed to either
+//! `icechunk_store::open_local_icechunk` or a plain
+//! `zarrs_object_store::AsyncObjectStore` over `LocalFileSystem`.
+//!
+//! Remote `object_store` backends (S3 / GCS / Azure / HTTP) land in a
+//! follow-up PR.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,12 +17,26 @@ use zarrs_object_store::object_store::local::LocalFileSystem;
 use zarrs_storage::AsyncReadableListableStorage;
 
 use crate::error::{Result, RustytreeError};
+use crate::icechunk_store::{looks_like_icechunk_repo, open_local_icechunk};
 
-/// Open a local-filesystem-backed store rooted at `path`.
+/// Build a zarrs storage handle for a local-filesystem path.
 ///
-/// `path` must exist and be a directory; on either failure the caller gets
-/// `RustytreeError::Io` mapped to `OSError` at the FFI boundary.
-pub(crate) fn build_local_store(path: &Path) -> Result<AsyncReadableListableStorage> {
+/// Detects icechunk repositories automatically and opens them at the given
+/// `branch` (defaulting to `"main"` when `None`); other directories are
+/// opened as vanilla Zarr v3 stores. The `branch` parameter is silently
+/// ignored on the vanilla path — branches are an icechunk concept.
+pub(crate) async fn build_local_store(
+    path: &Path,
+    branch: Option<&str>,
+) -> Result<AsyncReadableListableStorage> {
+    if looks_like_icechunk_repo(path) {
+        return open_local_icechunk(path, branch.unwrap_or("main")).await;
+    }
+    build_vanilla_local(path)
+}
+
+/// Open a directory as a vanilla Zarr v3 store via `LocalFileSystem`.
+fn build_vanilla_local(path: &Path) -> Result<AsyncReadableListableStorage> {
     let local = LocalFileSystem::new_with_prefix(path).map_err(|err| {
         RustytreeError::Io(std::io::Error::other(format!(
             "failed to open local filesystem at {}: {err}",
@@ -32,18 +51,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_local_store_succeeds_for_existing_dir() {
-        // The cargo manifest dir always exists while tests are running.
+    fn vanilla_local_succeeds_for_existing_dir() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert!(build_local_store(path).is_ok());
+        assert!(build_vanilla_local(path).is_ok());
     }
 
     #[test]
-    fn build_local_store_fails_for_missing_dir() {
+    fn vanilla_local_fails_for_missing_dir() {
         let path = Path::new("/this/path/does/not/exist/rustytree-test");
-        // `Ok` is `Arc<dyn ...>` (not `Debug`), so reach for the err side
-        // explicitly instead of `expect_err`.
-        match build_local_store(path) {
+        match build_vanilla_local(path) {
             Err(RustytreeError::Io(_)) => {}
             Err(other) => panic!("expected Io variant, got {other:?}"),
             Ok(_) => panic!("expected Err for non-existent dir"),

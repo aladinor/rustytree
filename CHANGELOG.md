@@ -13,6 +13,17 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- icechunk dispatch on local filesystem ([#9]): `_rustytree.open_datatree`
+  now auto-detects an on-disk icechunk repository (presence of a `repo`
+  manifest file + `snapshots/` directory) and routes through
+  `icechunk::Repository::open` + `readonly_session(BranchTipRef(branch))`,
+  wrapping the resulting session as `zarrs_icechunk::AsyncIcechunkStore`.
+  Vanilla Zarr v3 directories continue to go through `zarrs_object_store`.
+  New `branch=` kwarg defaults to `"main"`. Same `NodeData` shape comes
+  back from either path. New module `src/icechunk_store.rs`. Cargo deps:
+  `icechunk = "2"`, `zarrs_icechunk = "0.5"`. 6 new pytest tests in
+  `tests/test_icechunk.py` against a local icechunk fixture, plus a
+  KTWX-repo smoke test that skips when the repo isn't present locally.
 - Async metadata walk for a single Zarr v3 group on local filesystem ([#7]):
   `src/store.rs` builds an `AsyncReadableListableStorage` from a path via
   `zarrs_object_store` + `LocalFileSystem`. `src/walk.rs::open_single`
@@ -85,3 +96,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#6]: https://github.com/aladinor/rustytree/pull/6
 [#7]: https://github.com/aladinor/rustytree/pull/7
 [#8]: https://github.com/aladinor/rustytree/pull/8
+[#9]: https://github.com/aladinor/rustytree/pull/9
