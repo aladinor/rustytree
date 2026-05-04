@@ -26,9 +26,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 futures = "0.3"
 thiserror = "2"
 
-# Zarr v3 reader stack. Remote object_store backends (S3/GCS/Azure/HTTP) and
-# the icechunk + zarrs_icechunk pair land in the follow-up that adds the
-# icechunk store dispatch. This PR is local-filesystem + vanilla v3 only.
+# Zarr v3 reader stack. Remote object_store backends (S3/GCS/Azure/HTTP)
+# land in a follow-up; this PR ships local-filesystem only for both the
+# vanilla and icechunk paths.
 #
 # `object_store` is reached through `zarrs_object_store::object_store` (re-
 # exported) so we don't have to track its semver-incompatible version
@@ -38,6 +38,13 @@ zarrs = { version = "0.22", features = ["async"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["fs"] }
 serde_json = "1"
+
+# icechunk = transactional Zarr v3 storage layer. `zarrs_icechunk` wraps an
+# icechunk `Session` as `AsyncReadableListableStorageTraits` so the walk
+# code stays polymorphic: the same `open_single` runs against either an
+# icechunk session or a vanilla object_store-backed store.
+icechunk = "2"
+zarrs_icechunk = "0.5"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

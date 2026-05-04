@@ -17,6 +17,7 @@ use pyo3::types::{PyDict, PyList};
 use serde_json::Value as JsonValue;
 
 mod error;
+mod icechunk_store;
 mod node;
 mod runtime;
 mod store;
@@ -27,6 +28,11 @@ use crate::node::{NodeData, VarMeta};
 
 /// Open a Zarr v3 store at `path` and return a metadata snapshot of the
 /// group at `group` (default `"/"`).
+///
+/// `path` may point at either a vanilla Zarr v3 directory or an icechunk
+/// repository on local filesystem; rustytree auto-detects the layout.
+/// `branch` selects the icechunk branch (default `"main"`); it's silently
+/// ignored on the vanilla path.
 ///
 /// The returned dict has:
 ///
@@ -41,29 +47,34 @@ use crate::node::{NodeData, VarMeta};
 /// }
 /// ```
 ///
-/// Only local-filesystem inputs are accepted today; passing a URL, fsspec
-/// object, or icechunk session yields `NotImplementedError`.
+/// Remote stores (`s3://`, `gs://`, ...) are not supported in this build;
+/// passing one yields `NotImplementedError`.
 #[pyfunction]
-#[pyo3(signature = (path, *, group = None))]
+#[pyo3(signature = (path, *, group = None, branch = None))]
 fn open_datatree<'py>(
     py: Python<'py>,
     path: &str,
     group: Option<&str>,
+    branch: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let path = parse_local_path(path)?;
     let group_path = group.unwrap_or("/");
+    let branch = branch.map(str::to_string);
 
     let node = py.detach(move || -> Result<NodeData> {
-        let store = store::build_local_store(&path)?;
-        runtime::handle().block_on(walk::open_single(&store, group_path))
+        runtime::handle().block_on(async {
+            let store = store::build_local_store(&path, branch.as_deref()).await?;
+            walk::open_single(&store, group_path).await
+        })
     })?;
 
     node_to_pydict(py, &node)
 }
 
 /// Parse the `path` argument. Today: only local-filesystem paths or
-/// `file://` URLs. Anything else is rejected with `NotImplementedError`
-/// (the follow-up PR adds remote `object_store` + icechunk dispatch).
+/// `file://` URLs. Remote URL schemes are rejected with
+/// `NotImplementedError` (the follow-up PR adds remote `object_store`
+/// dispatch).
 fn parse_local_path(input: &str) -> PyResult<PathBuf> {
     if let Some(rest) = input.strip_prefix("file://") {
         return Ok(PathBuf::from(rest));
