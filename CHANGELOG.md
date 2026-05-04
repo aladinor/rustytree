@@ -13,12 +13,23 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Async metadata walk for a single Zarr v3 group on local filesystem ([#7]):
+  `src/store.rs` builds an `AsyncReadableListableStorage` from a path via
+  `zarrs_object_store` + `LocalFileSystem`. `src/walk.rs::open_single`
+  opens the group, lists its child arrays, captures dims/dtype/shape/attrs,
+  and returns a `NodeData`. `_rustytree.open_datatree(path, *, group=None)`
+  is now wired end-to-end and returns a Python dict
+  `{"path", "attrs", "vars": [{"name", "dims", "dtype", "shape", "attrs"}]}`.
+  `file://` URLs accepted; other URL schemes (s3://, gs://, …) raise
+  `NotImplementedError` with a clear message — the icechunk + remote
+  `object_store` dispatch lands in the next PR.
+- 8 new pytest tests against a synthetic 2-array Zarr v3 fixture
+  (`tests/test_walk.py`).
 - Async runtime + error scaffolding ([#6]): `src/runtime.rs` exposes a
   process-global `tokio` multi-threaded runtime via `OnceLock`;
   `src/error.rs` defines `RustytreeError` (thiserror enum) with a
   `From<RustytreeError> for PyErr` mapping each variant to the right
   Python exception (`OSError`, `KeyError`, `ValueError`, `RuntimeError`).
-  No callers yet; the upcoming hierarchy-walk PR consumes them.
 - Project scaffold ([#1]): maturin-built PyO3 cdylib registered as an
   xarray backend; `xr.open_datatree(engine="rustytree")` resolves to a
   stub raising `NotImplementedError` until the walk is implemented.
@@ -34,6 +45,10 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- Dependency additions ([#7]): `zarrs = "0.22"` (with `async`),
+  `zarrs_storage = "0.4"` (with `async`), `zarrs_object_store = "0.6"`
+  (with `fs`), `serde_json = "1"`. icechunk + remote `object_store`
+  backends remain deferred to the icechunk-dispatch PR.
 - Dependency bump ([#6]): `pyo3` 0.22 → 0.28. Removes the
   `unsafe_op_in_unsafe_fn = "allow"` workaround that PyO3 0.22 needed
   under edition 2024. Adds `tokio` (rt-multi-thread + sync), `futures`,
@@ -62,3 +77,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#4]: https://github.com/aladinor/rustytree/pull/4
 [#5]: https://github.com/aladinor/rustytree/pull/5
 [#6]: https://github.com/aladinor/rustytree/pull/6
+[#7]: https://github.com/aladinor/rustytree/pull/7
