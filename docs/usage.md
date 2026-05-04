@@ -1,9 +1,9 @@
 # Usage
 
-> **Status:** Phase 1 / Phase 1.5 shipped — plugin discovery only. The real
-> hierarchy walk, lazy reads, and decoding land in Phase 2 onward. Calls to
-> `xr.open_datatree(..., engine="rustytree")` raise `NotImplementedError`
-> for now. Track progress in [`CHANGELOG.md`](../CHANGELOG.md).
+> **Status:** plugin discovery is wired up; the hierarchy walk, lazy reads,
+> and decoding are not yet implemented. Calls to
+> `xr.open_datatree(..., engine="rustytree")` raise `NotImplementedError`.
+> See [`CHANGELOG.md`](../CHANGELOG.md) for what has shipped.
 
 ## Install (development)
 
@@ -27,14 +27,15 @@ uv pip install --python .venv/bin/python -e ".[dev]"               # pulls pytes
 ## Run the test suite
 
 ```bash
-.venv/bin/pytest tests/        # 9 tests as of Phase 1
-cargo test                     # Rust unit tests (none yet — Phase 2 adds them)
+.venv/bin/pytest tests/        # Python integration tests
+cargo test                     # Rust unit tests (currently none)
 ```
 
-## Planned API (Phase 2+)
+## Planned API
 
-Once Phase 2 lands, the engine will be polymorphic over icechunk and vanilla
-Zarr v3 — same call shape as `engine="zarr"` works today:
+Once the async hierarchy walk lands, the engine will be polymorphic over
+icechunk and vanilla Zarr v3 — same call shape as `engine="zarr"` works
+today:
 
 ```python
 import xarray as xr
@@ -53,7 +54,7 @@ dt = xr.open_datatree("/path/to/repo", engine="rustytree", branch="main")
 dt = xr.open_datatree("s3://bucket/store.zarr", engine="rustytree",
                       storage_options={"region": "us-east-1"})
 
-# (d) Glob-filtered partial open (Phase 8)
+# (d) Glob-filtered partial open (later milestone)
 dt = xr.open_datatree("/path/to/repo", engine="rustytree",
                       group="*/sweep_0")  # only lowest-elevation sweeps
 ```
@@ -61,4 +62,5 @@ dt = xr.open_datatree("/path/to/repo", engine="rustytree",
 ## Performance
 
 Goals and target speedups vs. `engine="zarr"` are documented in
-[`architecture.md`](architecture.md); benchmarks land in Phase 9.
+[`architecture.md`](architecture.md); the benchmark suite is not yet
+implemented.
