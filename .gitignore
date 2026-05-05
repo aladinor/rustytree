@@ -44,3 +44,6 @@ Thumbs.db
 
 # Local planning notes (per-developer; not part of repo)
 plans/
+
+# Jupyter
+.ipynb_checkpoints/
