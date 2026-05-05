@@ -252,6 +252,36 @@ def test_open_dataset_icechunk_literal_group(tiny_icechunk_repo: Path) -> None:
     xr.testing.assert_identical(rusty, zarr_ds)
 
 
+def test_literal_group_no_leading_slash_icechunk(
+    multilevel_icechunk_repo: Path,
+) -> None:
+    """xarray's convention is absolute group paths, but users commonly
+    write them without a leading slash (``group="volume_a/sweep_0"``).
+    icechunk's path validator strictly requires a leading ``/`` and was
+    raising ``invalid root path`` until we normalized literal paths on
+    the Python side. Regression test exercises the icechunk fast-path
+    specifically — vanilla Zarr v3 accepts relative paths silently, so
+    a vanilla test would not catch the original failure mode.
+    """
+    import icechunk
+
+    rusty = xr.open_dataset(
+        str(multilevel_icechunk_repo),
+        engine="rustytree",
+        group="volume_a/sweep_0",
+    )
+    storage = icechunk.local_filesystem_storage(str(multilevel_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+    zarr_ds = xr.open_dataset(
+        session.store,
+        engine="zarr",
+        consolidated=False,
+        group="/volume_a/sweep_0",
+    )
+    xr.testing.assert_identical(rusty, zarr_ds)
+
+
 def test_open_dataset_glob_group_rejects() -> None:
     """Glob `group=` patterns aren't meaningful for `open_dataset`
     (multi-match, single-Dataset return). The entrypoint should raise

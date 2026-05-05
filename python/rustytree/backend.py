@@ -142,6 +142,17 @@ def _build_rust_kwargs(
 _GLOB_CHARS = re.compile(r"[*?\[]")
 
 
+def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
+    """Prepend ``/`` to literal group paths so icechunk's path validator
+    accepts them. Globs are left alone: ``PurePosixPath.match`` treats
+    relative patterns as suffix matches, absolute ones as full-path
+    matches — meaningfully different.
+    """
+    if group and not is_glob and not group.startswith("/"):
+        return "/" + group
+    return group
+
+
 def _to_rust_source(filename_or_obj: Any) -> Any:
     """Translate the user's `filename_or_obj` into the shape the Rust
     `open_datatree` expects.
@@ -343,6 +354,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # case stays on the fast path (Rust walks only the requested
         # subtree).
         is_glob = group is not None and bool(_GLOB_CHARS.search(group))
+        group = _normalize_literal_group(group, is_glob)
 
         tree = _rust_open(
             source,
@@ -409,6 +421,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
                 "are not supported because `open_dataset` returns a single "
                 "Dataset. Use `xr.open_datatree(group=...)` instead."
             )
+        group = _normalize_literal_group(group, is_glob=False)
 
         source = _to_rust_source(filename_or_obj)
         storage_options_arg = None if isinstance(source, bytes) else storage_options
