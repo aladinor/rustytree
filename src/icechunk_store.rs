@@ -93,12 +93,12 @@ pub(crate) async fn open_local_icechunk(
 ///     we pin `icechunk = "2"` and CI must keep `icechunk` and
 ///     `icechunk-python` versions matched.
 pub(crate) fn store_from_session_bytes(bytes: &[u8]) -> Result<AsyncReadableListableStorage> {
-    let session = Session::from_bytes(bytes).map_err(|err| {
-        RustytreeError::Other(format!(
-            "icechunk: failed to reconstruct Session from bytes ({} bytes): {err}",
-            bytes.len()
-        ))
-    })?;
+    // Typed `?` propagation — `Session::from_bytes` returns
+    // `SessionResult<Self>`, which converts to `RustytreeError` via the
+    // `#[from] SessionError` arm. The `IcechunkSession` variant maps to
+    // Python's `ValueError` so callers see "you handed us bad bytes"
+    // rather than "internal RuntimeError".
+    let session = Session::from_bytes(bytes)?;
     Ok(Arc::new(AsyncIcechunkStore::new(session)))
 }
 
@@ -139,7 +139,13 @@ mod tests {
 
     #[test]
     fn store_from_session_bytes_rejects_garbage() {
-        let result = store_from_session_bytes(b"not msgpack");
-        assert!(matches!(result, Err(RustytreeError::Other(_))));
+        // `AsyncReadableListableStorageTraits` (the Ok branch) doesn't
+        // implement Debug, so we can't `{:?}` the whole `Result` —
+        // discriminate the variant by hand.
+        match store_from_session_bytes(b"not msgpack") {
+            Err(RustytreeError::IcechunkSession(_)) => {}
+            Err(other) => panic!("expected IcechunkSession variant, got: {other:?}"),
+            Ok(_) => panic!("expected error for garbage bytes, got Ok"),
+        }
     }
 }

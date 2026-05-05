@@ -42,6 +42,15 @@ pub(crate) enum RustytreeError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// Failure round-tripping an icechunk `Session` through its msgpack
+    /// `as_bytes()` / `from_bytes()` API. Surfaces from
+    /// `icechunk_store::store_from_session_bytes` when the user hands us
+    /// bytes that aren't a valid serialised session — typically because
+    /// `icechunk` and `icechunk-python` linked different minor versions
+    /// and the format drifted, or the bytes were corrupted in transit.
+    #[error("icechunk session: {0}")]
+    IcechunkSession(#[from] icechunk::session::SessionError),
+
     /// Transitional catch-all for upstream errors that don't yet have a typed
     /// variant. Replace each call site with a typed variant (`Zarrs`,
     /// `Icechunk`, `ObjectStore`, ...) as the corresponding crates are added,
@@ -56,7 +65,14 @@ impl From<RustytreeError> for PyErr {
         match err {
             RustytreeError::Io(_) => PyOSError::new_err(msg),
             RustytreeError::NotFound(_) => PyKeyError::new_err(msg),
-            RustytreeError::InvalidInput(_) => PyValueError::new_err(msg),
+            // `InvalidInput` (caller-supplied kwargs) and
+            // `IcechunkSession` (caller-supplied bytes blob) both
+            // surface as `ValueError` — identical body intentional;
+            // grouped to silence clippy::match_same_arms while keeping
+            // the variants explicit at the call site.
+            RustytreeError::InvalidInput(_) | RustytreeError::IcechunkSession(_) => {
+                PyValueError::new_err(msg)
+            }
             RustytreeError::Other(_) => PyRuntimeError::new_err(msg),
         }
     }
@@ -92,5 +108,20 @@ mod tests {
     fn display_other() {
         let err = RustytreeError::Other("upstream failure".into());
         assert_eq!(err.to_string(), "upstream failure");
+    }
+
+    #[test]
+    fn display_icechunk_session_wraps_underlying() {
+        // Construct via the `?` path: `Session::from_bytes` on garbage
+        // produces a `SessionError`, which our `#[from]` arm wraps.
+        let err: RustytreeError = icechunk::session::Session::from_bytes(b"garbage")
+            .expect_err("from_bytes(\"garbage\") should fail")
+            .into();
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("icechunk session: "),
+            "expected typed prefix, got: {msg}"
+        );
+        assert!(matches!(err, RustytreeError::IcechunkSession(_)));
     }
 }
