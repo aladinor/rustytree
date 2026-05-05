@@ -1,26 +1,34 @@
 //! Async metadata walk for Zarr v3 groups.
 //!
-//! Two entry points:
+//! Three entry points:
 //!   - [`open_single`] reads metadata for one group only.
-//!   - [`walk_recursive`] discovers descendant groups starting from a root,
-//!     then opens every group's metadata in parallel.
+//!   - [`walk_recursive`] is the public dispatcher. For icechunk inputs
+//!     it routes to [`walk_icechunk_session_snapshot`] (the in-memory
+//!     snapshot fast-path); for vanilla Zarr v3 it routes to the
+//!     generic [`walk_via_zarrs`] which does per-node `Group::async_open`
+//!     + `Array::async_open` round-trips.
+//!   - Phase C eager-fetch runs after either path produces `NodeData`.
 //!
-//! No chunk data is fetched at this stage; the lazy chunk-read path lands
-//! alongside the `BackendArray` adapter in a later PR.
+//! No chunk data is fetched at the metadata stage; the lazy chunk-read
+//! path lands alongside the `BackendArray` adapter.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::future::try_join_all;
-use tokio::sync::Semaphore;
-use zarrs::array::Array;
+use icechunk::format::Path as IcePath;
+use icechunk::format::snapshot::NodeData as IceNodeData;
+use icechunk::session::Session;
+use tokio::sync::{RwLock, Semaphore};
+use zarrs::array::{Array, ArrayMetadata};
 use zarrs::array_subset::ArraySubset;
-use zarrs::group::Group;
+use zarrs::group::{Group, GroupMetadata};
 use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTraits};
 
 use crate::dtype_dispatch::for_each_supported_dtype;
 use crate::error::{Result, RustytreeError};
 use crate::node::{EagerElements, NodeData, VarMeta};
+use crate::store::WalkSource;
 
 /// Cap on element count for eager pre-fetching. Coords / time-likes
 /// larger than this stay lazy — at 1 M elements an int64 coord is 8 MB,
@@ -79,18 +87,21 @@ pub(crate) async fn open_single(
 /// requests per HTTP client. Override with `max_concurrency=` from the
 /// Python boundary.
 pub(crate) async fn walk_recursive(
-    store: AsyncReadableListableStorage,
+    source: WalkSource,
     root_path: &str,
     max_concurrency: Option<usize>,
 ) -> Result<Vec<NodeData>> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.unwrap_or(32).max(1)));
-    let mut paths = Vec::new();
-    discover_paths(&store, root_path.to_string(), &semaphore, &mut paths).await?;
-
-    // All groups' metadata in parallel. Each `open_single` itself fans
-    // out per-array work via `try_join_all`, so this gives true two-level
-    // concurrency.
-    let mut nodes = try_join_all(paths.iter().map(|p| open_single(&store, p))).await?;
+    let mut nodes = match source {
+        WalkSource::Icechunk(bundle) => {
+            // Snapshot fast-path: read group + array metadata directly
+            // from icechunk's already-fetched in-memory snapshot tree
+            // instead of issuing per-node `Group::async_open` /
+            // `Array::async_open` round-trips through the session.
+            walk_icechunk_session_snapshot(&bundle.session, &bundle.store, root_path).await?
+        }
+        WalkSource::Vanilla(store) => walk_via_zarrs(&store, root_path, &semaphore).await?,
+    };
 
     // Phase C: eager-fetch values for vars that xarray's per-node CF
     // decoders + Index construction will read anyway (1-D self-named
@@ -101,6 +112,227 @@ pub(crate) async fn walk_recursive(
     eager_phase(&semaphore, &mut nodes).await?;
 
     Ok(nodes)
+}
+
+/// Generic zarrs-based walker for vanilla Zarr v3 stores. Discovers
+/// every descendant group via async `list_dir` + `Group::async_open`,
+/// then fans out per-group metadata fetches via `open_single`.
+async fn walk_via_zarrs(
+    store: &AsyncReadableListableStorage,
+    root_path: &str,
+    semaphore: &Arc<Semaphore>,
+) -> Result<Vec<NodeData>> {
+    let mut paths = Vec::new();
+    discover_paths(store, root_path.to_string(), semaphore, &mut paths).await?;
+
+    // All groups' metadata in parallel. Each `open_single` itself fans
+    // out per-array work via `try_join_all`, so this gives true two-level
+    // concurrency.
+    try_join_all(paths.iter().map(|p| open_single(store, p))).await
+}
+
+/// Snapshot-fast-path walker for icechunk sessions.
+///
+/// `Session::list_nodes(parent)` enumerates every descendant group +
+/// array inline from the already-fetched snapshot manifest. Each
+/// `NodeSnapshot` carries `user_data: Bytes` — the on-disk `zarr.json`
+/// payload — which we deserialise into zarrs's `ArrayMetadata` /
+/// `GroupMetadata` types and then construct an `Arc<Array>` /
+/// `Group` from via `new_with_metadata` (synchronous; no I/O).
+///
+/// This bypasses zarrs's `Group::async_open` + `Array::async_open`
+/// round-trips through the session for every node. On
+/// `s3://nexrad-arco/KLOT` (107 groups + 1300 arrays) the generic
+/// walker pays ~1.6 s wall on this work; the snapshot walker reduces
+/// it to <100 ms wall (the snapshot is fully in-memory after
+/// `Repository::open` user-side).
+async fn walk_icechunk_session_snapshot(
+    session: &Arc<RwLock<Session>>,
+    store: &AsyncReadableListableStorage,
+    root_path: &str,
+) -> Result<Vec<NodeData>> {
+    let parent = IcePath::new(root_path).map_err(|err| {
+        RustytreeError::InvalidInput(format!("icechunk: invalid root path {root_path:?}: {err}"))
+    })?;
+
+    // Hold the read lock just long enough to gather the node list. The
+    // iterator borrows from the session, so we collect into an owned
+    // Vec before releasing the guard.
+    let session_guard = session.read().await;
+    let nodes_iter = session_guard.list_nodes(&parent).await.map_err(|err| {
+        RustytreeError::Other(format!("icechunk: list_nodes({root_path}) failed: {err}"))
+    })?;
+    let snapshots: Vec<icechunk::format::snapshot::NodeSnapshot> = nodes_iter
+        .collect::<icechunk::session::SessionResult<Vec<_>>>()
+        .map_err(|err| {
+            RustytreeError::Other(format!("icechunk: snapshot enumeration failed: {err}"))
+        })?;
+    drop(session_guard);
+
+    // Two passes: build a map of group-path -> NodeData (with empty
+    // vars list), then attach each Array node as a VarMeta on its
+    // parent group. The second pass needs the first's keys, so we
+    // can't fuse them.
+    let mut groups: BTreeMap<String, NodeData> = BTreeMap::new();
+    let mut arrays: Vec<icechunk::format::snapshot::NodeSnapshot> = Vec::new();
+    for snap in snapshots {
+        match &snap.node_data {
+            IceNodeData::Group => {
+                let path = ice_path_to_string(&snap.path);
+                let attrs = parse_group_attrs(&snap.user_data, &path)?;
+                groups.insert(
+                    path.clone(),
+                    NodeData {
+                        path,
+                        attrs,
+                        vars: Vec::new(),
+                    },
+                );
+            }
+            IceNodeData::Array { .. } => arrays.push(snap),
+        }
+    }
+
+    // Build VarMetas in parallel, batched by parent group.
+    // `Array::new_with_metadata` is synchronous CPU work
+    // (codec/chunk-grid construction); for 1300+ arrays in a
+    // multi-VCP radar tree it's the dominant cost of the fast-path.
+    // Spawning one blocking task per array drowned in scheduling
+    // overhead (μs of work per task vs μs of spawn cost) — batching
+    // by group amortises the spawn while still letting up to N_cores
+    // groups build concurrently.
+    let mut by_parent: BTreeMap<String, Vec<icechunk::format::snapshot::NodeSnapshot>> =
+        BTreeMap::new();
+    for snap in arrays {
+        let array_path = ice_path_to_string(&snap.path);
+        let parent_path = match array_path.rsplit_once('/') {
+            Some(("", _)) | None => "/".to_string(),
+            Some((parent, _)) => parent.to_string(),
+        };
+        by_parent.entry(parent_path).or_default().push(snap);
+    }
+
+    let group_jobs: Vec<(String, Vec<VarMeta>)> =
+        try_join_all(by_parent.into_iter().map(|(parent_path, snaps)| {
+            let store = store.clone();
+            tokio::task::spawn_blocking(move || -> Result<(String, Vec<VarMeta>)> {
+                let mut vars = Vec::with_capacity(snaps.len());
+                for snap in snaps {
+                    let array_path = ice_path_to_string(&snap.path);
+                    vars.push(build_var_meta_from_snapshot(
+                        &snap,
+                        &array_path,
+                        store.clone(),
+                    )?);
+                }
+                Ok((parent_path, vars))
+            })
+        }))
+        .await
+        .map_err(|err| RustytreeError::Other(format!("icechunk: array build join failed: {err}")))?
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+
+    for (parent_path, vars) in group_jobs {
+        if let Some(node) = groups.get_mut(&parent_path) {
+            node.vars = vars;
+        } else if !vars.is_empty() {
+            return Err(RustytreeError::Other(format!(
+                "icechunk: arrays under {parent_path} have no parent group"
+            )));
+        }
+    }
+
+    // Pre-order traversal: BTreeMap sorts by path, which gives us
+    // root-first ordering compatible with `xr.DataTree.from_dict`'s
+    // expectation that parents land before children.
+    Ok(groups.into_values().collect())
+}
+
+/// Convert icechunk's `Path` to a `/`-rooted string. icechunk's
+/// `Display` on `Path` yields the same shape (`"/foo/bar"`).
+fn ice_path_to_string(p: &IcePath) -> String {
+    p.to_string()
+}
+
+/// Parse a group's `user_data` bytes (the `zarr.json` payload) into a
+/// `GroupMetadata` and project the user attrs into a `BTreeMap`.
+fn parse_group_attrs(user_data: &[u8], path: &str) -> Result<BTreeMap<String, serde_json::Value>> {
+    if user_data.is_empty() {
+        // Root or implicit groups have no user-data; treat as empty
+        // attrs rather than failing.
+        return Ok(BTreeMap::new());
+    }
+    let metadata: GroupMetadata = serde_json::from_slice(user_data).map_err(|err| {
+        RustytreeError::Other(format!(
+            "icechunk: failed to parse group zarr.json at {path}: {err}"
+        ))
+    })?;
+    let attrs_map = match &metadata {
+        GroupMetadata::V3(v3) => &v3.attributes,
+        GroupMetadata::V2(v2) => &v2.attributes,
+    };
+    Ok(attrs_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect())
+}
+
+/// Build a `VarMeta` from a snapshot's array node — both the on-disk
+/// `zarr.json` (parsed via zarrs's `ArrayMetadata`) and the
+/// pre-projected snapshot fields (`shape`, `dimension_names`).
+///
+/// The resulting `Arc<Array>` is constructed via
+/// `Array::new_with_metadata` which is synchronous and does no I/O.
+fn build_var_meta_from_snapshot(
+    snap: &icechunk::format::snapshot::NodeSnapshot,
+    array_path: &str,
+    store: AsyncReadableListableStorage,
+) -> Result<VarMeta> {
+    let metadata: ArrayMetadata = serde_json::from_slice(&snap.user_data).map_err(|err| {
+        RustytreeError::Other(format!(
+            "icechunk: failed to parse array zarr.json at {array_path}: {err}"
+        ))
+    })?;
+
+    let array = Array::new_with_metadata(store, array_path, metadata).map_err(|err| {
+        RustytreeError::Other(format!(
+            "icechunk: failed to construct Array from snapshot for {array_path}: {err}"
+        ))
+    })?;
+
+    let name = array_path
+        .rsplit_once('/')
+        .map_or_else(|| array_path.to_string(), |(_, last)| last.to_string());
+
+    let dims = array.dimension_names().as_ref().map_or_else(
+        || {
+            (0..array.shape().len())
+                .map(|i| format!("dim_{i}"))
+                .collect()
+        },
+        |names| {
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| n.clone().unwrap_or_else(|| format!("dim_{i}")))
+                .collect()
+        },
+    );
+
+    let dtype = format!("{}", array.data_type());
+    let shape = array.shape().to_vec();
+    let attrs = clone_attrs(array.attributes());
+
+    Ok(VarMeta {
+        name,
+        dims,
+        dtype,
+        shape,
+        attrs,
+        array: Arc::new(array),
+        eager: None,
+    })
 }
 
 /// Depth-first descent that records every group path beneath `path`

@@ -91,8 +91,13 @@ fn open_datatree<'py>(
         let session_bytes = bytes.as_bytes().to_vec();
         let nodes = py.detach(move || -> Result<Vec<NodeData>> {
             runtime::handle().block_on(async {
-                let store = icechunk_store::store_from_session_bytes(&session_bytes)?;
-                walk::walk_recursive(store, &group_path, max_concurrency_val).await
+                let bundle = icechunk_store::bundle_from_session_bytes(&session_bytes)?;
+                walk::walk_recursive(
+                    store::WalkSource::Icechunk(bundle),
+                    &group_path,
+                    max_concurrency_val,
+                )
+                .await
             })
         })?;
         return nodes_to_pydict(py, &nodes);
@@ -114,17 +119,17 @@ fn open_datatree<'py>(
 
     let nodes = py.detach(move || -> Result<Vec<NodeData>> {
         runtime::handle().block_on(async {
-            let store = match &spec {
+            let walk_source = match &spec {
                 StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
                 StoreSpec::S3 { bucket, prefix } => {
                     // Vanilla Zarr v3 only. icechunk-on-S3 used to live
                     // here as an auto-detected URL dispatch; Phase 7
                     // dropped it — users construct the icechunk Session
                     // themselves and pass the session bytes instead.
-                    store::build_vanilla_s3(bucket, prefix, &options)?
+                    store::WalkSource::Vanilla(store::build_vanilla_s3(bucket, prefix, &options)?)
                 }
             };
-            walk::walk_recursive(store, &group_path, max_concurrency_val).await
+            walk::walk_recursive(walk_source, &group_path, max_concurrency_val).await
         })
     })?;
 

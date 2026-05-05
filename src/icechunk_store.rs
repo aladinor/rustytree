@@ -1,9 +1,18 @@
 //! icechunk-backed Zarr v3 store.
 //!
+//! Both entry points return an [`IcechunkBundle`] holding a live
+//! `Arc<RwLock<Session>>` paired with a zarrs-compatible store. The
+//! session powers the snapshot fast-path metadata walker (see
+//! `walk::walk_icechunk_session_snapshot`); the store powers lazy
+//! chunk reads via zarrs's `Array::async_retrieve_*` API. They wrap
+//! the same underlying `Session` object — `AsyncIcechunkStore`
+//! consumes it on construction and we ask for it back via
+//! `store.session()`.
+//!
 //! Two construction paths:
 //!   - [`open_local_icechunk`]: open an icechunk repository from a
 //!     local-filesystem path. Convenience for zero-credential local dev.
-//!   - [`store_from_session_bytes`]: rehydrate a `Session` from msgpack
+//!   - [`bundle_from_session_bytes`]: rehydrate a `Session` from msgpack
 //!     bytes produced by `icechunk-python`'s `PySession.as_bytes()`. The
 //!     primary path: users construct the icechunk Session themselves
 //!     (with whatever branch / credentials / cache config they want),
@@ -23,10 +32,36 @@ use icechunk::Repository;
 use icechunk::repository::VersionInfo;
 use icechunk::session::Session;
 use icechunk::storage::new_local_filesystem_storage;
+use tokio::sync::RwLock;
 use zarrs_icechunk::AsyncIcechunkStore;
 use zarrs_storage::AsyncReadableListableStorage;
 
 use crate::error::{Result, RustytreeError};
+
+/// A pre-opened icechunk session paired with the zarrs-compatible store
+/// that wraps it. The session is what powers the snapshot fast-path
+/// walker (in-memory metadata traversal); the store is what powers
+/// lazy chunk reads via zarrs's `Array::async_retrieve_*` API.
+///
+/// Both wrap the same underlying `icechunk::session::Session` —
+/// `AsyncIcechunkStore` consumes it and we ask for it back via
+/// `store.session()`, which returns the `Arc<RwLock<Session>>` it
+/// holds internally. Two handles, one source of truth.
+pub(crate) struct IcechunkBundle {
+    pub session: Arc<RwLock<Session>>,
+    pub store: AsyncReadableListableStorage,
+}
+
+/// Wrap an icechunk `Session` so both the snapshot fast-path and the
+/// lazy chunk-read path can share it.
+fn bundle(session: Session) -> IcechunkBundle {
+    let store = AsyncIcechunkStore::new(session);
+    let session = store.session();
+    IcechunkBundle {
+        session,
+        store: Arc::new(store),
+    }
+}
 
 /// Heuristic detector for an on-disk icechunk repository.
 ///
@@ -39,14 +74,11 @@ pub(crate) fn looks_like_icechunk_repo(path: &Path) -> bool {
     path.join("repo").is_file() && path.join("snapshots").is_dir()
 }
 
-/// Open an icechunk repository on local filesystem at `path` and produce a
-/// zarrs-compatible store rooted at the given branch.
+/// Open an icechunk repository on local filesystem at `path` and produce
+/// an [`IcechunkBundle`] (session + zarrs store).
 ///
 /// `branch` defaults to `"main"` when callers don't specify one.
-pub(crate) async fn open_local_icechunk(
-    path: &Path,
-    branch: &str,
-) -> Result<AsyncReadableListableStorage> {
+pub(crate) async fn open_local_icechunk(path: &Path, branch: &str) -> Result<IcechunkBundle> {
     let storage = new_local_filesystem_storage(path).await.map_err(|err| {
         RustytreeError::Other(format!(
             "icechunk: failed to open local-filesystem storage at {}: {err}",
@@ -71,7 +103,7 @@ pub(crate) async fn open_local_icechunk(
         ))
     })?;
 
-    Ok(Arc::new(AsyncIcechunkStore::new(session)))
+    Ok(bundle(session))
 }
 
 /// Rehydrate an `icechunk::session::Session` from the msgpack bytes
@@ -92,14 +124,14 @@ pub(crate) async fn open_local_icechunk(
 ///     `Session`). Format stability is bounded by icechunk's semver;
 ///     we pin `icechunk = "2"` and CI must keep `icechunk` and
 ///     `icechunk-python` versions matched.
-pub(crate) fn store_from_session_bytes(bytes: &[u8]) -> Result<AsyncReadableListableStorage> {
+pub(crate) fn bundle_from_session_bytes(bytes: &[u8]) -> Result<IcechunkBundle> {
     // Typed `?` propagation — `Session::from_bytes` returns
     // `SessionResult<Self>`, which converts to `RustytreeError` via the
     // `#[from] SessionError` arm. The `IcechunkSession` variant maps to
     // Python's `ValueError` so callers see "you handed us bad bytes"
     // rather than "internal RuntimeError".
     let session = Session::from_bytes(bytes)?;
-    Ok(Arc::new(AsyncIcechunkStore::new(session)))
+    Ok(bundle(session))
 }
 
 #[cfg(test)]
@@ -138,11 +170,11 @@ mod tests {
     }
 
     #[test]
-    fn store_from_session_bytes_rejects_garbage() {
-        // `AsyncReadableListableStorageTraits` (the Ok branch) doesn't
-        // implement Debug, so we can't `{:?}` the whole `Result` —
+    fn bundle_from_session_bytes_rejects_garbage() {
+        // `IcechunkBundle` doesn't implement Debug (its inner store is a
+        // `dyn` trait object), so we can't `{:?}` the whole `Result` —
         // discriminate the variant by hand.
-        match store_from_session_bytes(b"not msgpack") {
+        match bundle_from_session_bytes(b"not msgpack") {
             Err(RustytreeError::IcechunkSession(_)) => {}
             Err(other) => panic!("expected IcechunkSession variant, got: {other:?}"),
             Ok(_) => panic!("expected error for garbage bytes, got Ok"),

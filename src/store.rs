@@ -22,22 +22,31 @@ use zarrs_object_store::object_store::local::LocalFileSystem;
 use zarrs_storage::AsyncReadableListableStorage;
 
 use crate::error::{Result, RustytreeError};
-use crate::icechunk_store::{looks_like_icechunk_repo, open_local_icechunk};
+use crate::icechunk_store::{IcechunkBundle, looks_like_icechunk_repo, open_local_icechunk};
 
-/// Build a zarrs storage handle for a local-filesystem path.
+/// What kind of store the walk should consume.
+///
+/// `Icechunk` carries both the live `Session` (used by the snapshot
+/// fast-path metadata walker) and the matching zarrs store (used for
+/// lazy chunk reads). `Vanilla` is the generic-zarrs path for
+/// non-icechunk Zarr v3 stores; only the store handle is needed.
+pub(crate) enum WalkSource {
+    Icechunk(IcechunkBundle),
+    Vanilla(AsyncReadableListableStorage),
+}
+
+/// Build a [`WalkSource`] for a local-filesystem path.
 ///
 /// Detects icechunk repositories automatically and opens them at the given
 /// `branch` (defaulting to `"main"` when `None`); other directories are
 /// opened as vanilla Zarr v3 stores. The `branch` parameter is silently
 /// ignored on the vanilla path — branches are an icechunk concept.
-pub(crate) async fn build_local_store(
-    path: &Path,
-    branch: Option<&str>,
-) -> Result<AsyncReadableListableStorage> {
+pub(crate) async fn build_local_store(path: &Path, branch: Option<&str>) -> Result<WalkSource> {
     if looks_like_icechunk_repo(path) {
-        return open_local_icechunk(path, branch.unwrap_or("main")).await;
+        let bundle = open_local_icechunk(path, branch.unwrap_or("main")).await?;
+        return Ok(WalkSource::Icechunk(bundle));
     }
-    build_vanilla_local(path)
+    Ok(WalkSource::Vanilla(build_vanilla_local(path)?))
 }
 
 /// Open a directory as a vanilla Zarr v3 store via `LocalFileSystem`.
