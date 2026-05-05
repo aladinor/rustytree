@@ -1,0 +1,133 @@
+name: Release
+
+# Tag-driven: pushing a `vX.Y.Z` tag builds wheels + sdist and attaches
+# them to a GitHub Release with auto-generated notes. PyPI publishing
+# is gated behind a manual flip below — switch on once trusted
+# publishing is configured for the project on PyPI.
+#
+# `workflow_dispatch` lets us dry-run the matrix without cutting a
+# real release (e.g. on a release-prep branch) — the artifacts are
+# uploaded but the `release` job is skipped because the ref isn't a
+# tag.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # gh release create
+  id-token: write   # PyPI trusted publishing (when enabled)
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build-wheels:
+    name: wheel ${{ matrix.platform.target }} py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # manylinux x86_64 — auto picks the most compatible PEP 600
+          # tag the toolchain supports (manylinux_2_28 today).
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, manylinux: auto }
+          # manylinux aarch64 — Graviton, ARM cloud, Raspberry Pi.
+          # `maturin-action` cross-compiles inside the manylinux
+          # container via QEMU; build is ~2× wall-time vs native x86_64
+          # but produces a real manylinux aarch64 wheel.
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, manylinux: auto }
+          # Apple Silicon. The macos-14 runner is arm64-native, so the
+          # default target works without cross-compile.
+          - { os: macos-14, target: aarch64-apple-darwin, manylinux: auto }
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      # PyO3/maturin-action handles `--release`, manylinux container
+      # provisioning, and Python interpreter detection. We pass `-i
+      # python${PY}` so the wheel is built for exactly the matrix's
+      # interpreter rather than whatever happens to be on PATH.
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --strip --out dist -i python${{ matrix.python-version }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.target }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # Tag-only: assemble all wheels + sdist into a GitHub Release. Skipped
+  # on workflow_dispatch (no tag) so a dry-run from a branch builds the
+  # matrix without cutting a release.
+  release:
+    name: GitHub release
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    # Two rapid tag pushes shouldn't race: serialize per-tag, but
+    # don't cancel an in-flight release run (it's already uploaded
+    # most of its artifacts).
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --generate-notes \
+            --verify-tag \
+            dist/*
+
+  # PyPI publish is intentionally OFF for the first release. To enable:
+  #   1. Configure trusted publishing on PyPI for `aladinor/rustytree`.
+  #   2. Uncomment the `pypi-publish` job below.
+  #   3. Drop `dry-run` if it's still there.
+  # Until then, `pip install rustytree` won't work — users install
+  # from a wheel attached to the GitHub Release, or build from sdist.
+  #
+  # pypi-publish:
+  #   name: PyPI publish
+  #   needs: [build-wheels, build-sdist]
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   environment: pypi   # set up in repo Settings → Environments
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         path: dist
+  #         merge-multiple: true
+  #     - uses: pypa/gh-action-pypi-publish@release/v1
+  #       with:
+  #         packages-dir: dist
