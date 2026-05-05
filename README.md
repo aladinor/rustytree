@@ -15,35 +15,62 @@ dominant cost.
 against both icechunk repositories (pass `session.store`) and vanilla
 Zarr v3 stores (path or `s3://` URL). Lazy chunk reads via
 `RustyBackendArray`, CF decoding (incl. metadata-only datetime dtype
-inference), and the recursive multi-node walk are all in. See
+inference), the recursive multi-node walk, glob `group=` filtering, and
+non-recursive single-Dataset opens are all in. See
 [`CHANGELOG.md`](CHANGELOG.md) for the per-PR breakdown.
 
-Quickest way to see it in action: open `notebooks/klot_demo.ipynb`,
-which compares `engine="zarr"` and `engine="rustytree"` against the
-public anonymous NEXRAD KLOT icechunk repo on S3.
+Not on PyPI yet — install from source per **Quick start** below. Once
+the first wheel ships, the install reduces to `pip install rustytree`.
+
+## Example
+
+Open the public anonymous NEXRAD KLOT icechunk repo on S3:
+
+```python
+import icechunk
+import xarray as xr
+
+storage = icechunk.s3_storage(
+    bucket="nexrad-arco", prefix="KLOT",
+    region="us-east-1", anonymous=True,
+)
+session = icechunk.Repository.open(storage).readonly_session("main")
+
+# Open the full DataTree (107 nodes — every VCP × sweep combination).
+dt = xr.open_datatree(session.store, engine="rustytree")
+
+# Or grab one specific sweep as a flat Dataset (skips walking siblings):
+ds = xr.open_dataset(session.store, engine="rustytree",
+                     group="/VCP-12/sweep_0")
+
+# Or apply a glob pattern — the radar workflow that motivated Phase 8:
+# "give me sweep_0 from every VCP" returns a tree filtered to those
+# matches, with the VCP container groups auto-included as ancestors.
+sweeps_0 = xr.open_datatree(session.store, engine="rustytree",
+                            group="/*/sweep_0")
+```
+
+`engine="rustytree"` is a drop-in replacement for `engine="zarr"` —
+same `xr.open_datatree` / `xr.open_dataset` entry points, same
+`storage_options` / `decode_*` kwargs. The full demo (with side-by-side
+timings against `engine="zarr"`) is in
+[`notebooks/klot_demo.ipynb`](notebooks/klot_demo.ipynb).
 
 ## Quick start
 
 `rustytree` is a Rust extension built via [maturin](https://www.maturin.rs/);
-the [`uv`](https://docs.astral.sh/uv/) workflow below sets up a Python venv
-that contains the compiled extension plus the Python deps the notebooks
-need.
+[`uv sync`](https://docs.astral.sh/uv/) handles the venv, Python deps,
+and the Rust build (via maturin's PEP 517 hook) in one command.
 
 ```bash
 # Clone + enter the repo
 git clone https://github.com/aladinor/rustytree.git
 cd rustytree
 
-# Create a Python 3.12+ venv and install dev deps + maturin
-uv venv --python 3.12
-uv pip install --python .venv/bin/python maturin pytest pytest-cov \
-    'zarr>=3.0' 'icechunk>=2.0' 'xarray>=2024.10' jupyter
+# Install everything: venv, deps, and the compiled Rust extension.
+uv sync --extra dev
 
-# Build the Rust extension into the venv (release for benchmarks;
-# omit `--release` for faster iterations during development).
-.venv/bin/maturin develop --release
-
-# Run the test suite to confirm the install works
+# Confirm the install
 .venv/bin/pytest tests/
 
 # Launch Jupyter and open the demo notebook
@@ -52,7 +79,7 @@ uv pip install --python .venv/bin/python maturin pytest pytest-cov \
 
 The notebooks and tests don't require AWS credentials — KLOT is read
 anonymously via icechunk's anonymous S3 path. Network speed determines
-cold-cache timings (expect ~2–5 s for `engine="rustytree"` on KLOT
+cold-cache timings (expect ~1–3 s for `engine="rustytree"` on KLOT
 from a home connection; ~50 s for `engine="zarr"` on the same).
 
 ## Documentation
