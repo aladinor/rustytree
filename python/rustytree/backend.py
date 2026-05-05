@@ -24,6 +24,7 @@ by:
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -113,10 +114,11 @@ def _build_rust_kwargs(
     branch: str | None,
     storage_options: dict[str, Any] | None,
     max_concurrency: int | None,
+    recursive: bool | None = None,
 ) -> dict[str, Any]:
     """Forward only the kwargs the user actually set, so the Rust side
-    sees its own defaults (e.g. `max_concurrency=32`) rather than a
-    sea of `None`s."""
+    sees its own defaults (e.g. `max_concurrency=32`, `recursive=true`)
+    rather than a sea of `None`s."""
     kwargs: dict[str, Any] = {}
     if group is not None:
         kwargs["group"] = group
@@ -126,7 +128,17 @@ def _build_rust_kwargs(
         kwargs["storage_options"] = storage_options
     if max_concurrency is not None:
         kwargs["max_concurrency"] = max_concurrency
+    if recursive is not None:
+        kwargs["recursive"] = recursive
     return kwargs
+
+
+# Mirror xarray PR #11302's `_is_glob_pattern`: any of `*`, `?`, `[`
+# triggers glob handling. Plain literal paths take the non-recursive
+# fast-path in `open_dataset`. Glob support in `open_dataset` raises
+# until Phase 8 — `open_dataset` returns a single Dataset, so a
+# multi-match glob has no defined target.
+_GLOB_CHARS = re.compile(r"[*?\[]")
 
 
 def _to_rust_source(filename_or_obj: Any) -> Any:
@@ -353,29 +365,54 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         use_cftime: bool | None = None,
         decode_timedelta: bool | None = None,
     ) -> Dataset:
-        # Delegates to `open_datatree` and pulls out the requested
-        # node's Dataset. Today this means the rust walk recurses below
-        # `group` and we drop the descendants — wasteful for deep trees.
-        # A `recursive=False` knob on the Rust open is queued as a
-        # follow-up (see plan): worth it once anyone does
-        # `xr.open_dataset(s3_url, group="/deep/leaf")` in anger.
-        tree = self.open_datatree(
-            filename_or_obj,
-            drop_variables=drop_variables,
-            group=group,
-            branch=branch,
-            storage_options=storage_options,
-            max_concurrency=max_concurrency,
+        # `open_dataset` returns one Dataset, so for literal-path opens
+        # (`group=None`/`"/"` or any non-glob path) we ask the Rust
+        # walk to skip recursion past `group` — the descendants would
+        # be discarded anyway. On `s3://nexrad-arco/KLOT` that drops a
+        # full-tree open (107 nodes) to a single-group open. Glob
+        # patterns are rejected here: `open_dataset` returns one
+        # Dataset, so a multi-match glob has no defined target. Use
+        # `open_datatree(group="*/sweep_0")` (Phase 8) instead.
+        from rustytree._rustytree import open_datatree as _rust_open
+
+        if group is not None and _GLOB_CHARS.search(group):
+            raise NotImplementedError(
+                f"rustytree.open_dataset: glob `group=` patterns ({group!r}) "
+                "are not supported because `open_dataset` returns a single "
+                "Dataset. Use `xr.open_datatree(group=...)` instead."
+            )
+
+        source = _to_rust_source(filename_or_obj)
+        storage_options_arg = None if isinstance(source, bytes) else storage_options
+
+        tree = _rust_open(
+            source,
+            **_build_rust_kwargs(
+                group=group,
+                branch=branch,
+                storage_options=storage_options_arg,
+                max_concurrency=max_concurrency,
+                recursive=False,
+            ),
+        )
+
+        # With `recursive=False` the Rust dict has exactly one entry,
+        # keyed by the absolute path of the requested group.
+        target_path = group if (group and group != ROOT) else ROOT
+        if target_path not in tree:
+            raise KeyError(
+                f"rustytree.open_dataset: group {target_path!r} not found in store"
+            )
+        return _node_to_dataset(
+            tree[target_path],
             mask_and_scale=mask_and_scale,
             decode_times=decode_times,
             concat_characters=concat_characters,
             decode_coords=decode_coords,
+            drop_variables=drop_variables,
             use_cftime=use_cftime,
             decode_timedelta=decode_timedelta,
         )
-        # `open_datatree` re-roots when `group` is non-trivial, so the
-        # requested group is always at "/" of the returned DataTree.
-        return tree.dataset
 
     @classmethod
     def guess_can_open(cls, filename_or_obj: Any) -> bool:

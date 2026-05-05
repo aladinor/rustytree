@@ -86,10 +86,15 @@ pub(crate) async fn open_single(
 /// balance for object-storage backends that pipeline ~16 in-flight
 /// requests per HTTP client. Override with `max_concurrency=` from the
 /// Python boundary.
+///
+/// `recursive` (default `true`) controls whether we walk past
+/// `root_path`. With `recursive=false` we return exactly one
+/// [`NodeData`] — the requested group plus its arrays.
 pub(crate) async fn walk_recursive(
     source: WalkSource,
     root_path: &str,
     max_concurrency: Option<usize>,
+    recursive: bool,
 ) -> Result<Vec<NodeData>> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.unwrap_or(32).max(1)));
     let mut nodes = match source {
@@ -98,9 +103,17 @@ pub(crate) async fn walk_recursive(
             // from icechunk's already-fetched in-memory snapshot tree
             // instead of issuing per-node `Group::async_open` /
             // `Array::async_open` round-trips through the session.
-            walk_icechunk_session_snapshot(&bundle.session, &bundle.store, root_path).await?
+            walk_icechunk_session_snapshot(
+                &bundle.session,
+                &bundle.store,
+                root_path,
+                recursive,
+            )
+            .await?
         }
-        WalkSource::Vanilla(store) => walk_via_zarrs(&store, root_path, &semaphore).await?,
+        WalkSource::Vanilla(store) => {
+            walk_via_zarrs(&store, root_path, &semaphore, recursive).await?
+        }
     };
 
     // Phase C: eager-fetch values for vars that xarray's per-node CF
@@ -116,14 +129,22 @@ pub(crate) async fn walk_recursive(
 
 /// Generic zarrs-based walker for vanilla Zarr v3 stores. Discovers
 /// every descendant group via async `list_dir` + `Group::async_open`,
-/// then fans out per-group metadata fetches via `open_single`.
+/// then fans out per-group metadata fetches via `open_single`. With
+/// `recursive=false` the discovery step is skipped: only `root_path`
+/// itself is opened.
 async fn walk_via_zarrs(
     store: &AsyncReadableListableStorage,
     root_path: &str,
     semaphore: &Arc<Semaphore>,
+    recursive: bool,
 ) -> Result<Vec<NodeData>> {
-    let mut paths = Vec::new();
-    discover_paths(store, root_path.to_string(), semaphore, &mut paths).await?;
+    let paths: Vec<String> = if recursive {
+        let mut paths = Vec::new();
+        discover_paths(store, root_path.to_string(), semaphore, &mut paths).await?;
+        paths
+    } else {
+        vec![root_path.to_string()]
+    };
 
     // All groups' metadata in parallel. Each `open_single` itself fans
     // out per-array work via `try_join_all`, so this gives true two-level
@@ -150,6 +171,7 @@ async fn walk_icechunk_session_snapshot(
     session: &Arc<RwLock<Session>>,
     store: &AsyncReadableListableStorage,
     root_path: &str,
+    recursive: bool,
 ) -> Result<Vec<NodeData>> {
     let parent = IcePath::new(root_path).map_err(|err| {
         RustytreeError::InvalidInput(format!("icechunk: invalid root path {root_path:?}: {err}"))
@@ -173,12 +195,23 @@ async fn walk_icechunk_session_snapshot(
     // vars list), then attach each Array node as a VarMeta on its
     // parent group. The second pass needs the first's keys, so we
     // can't fuse them.
+    //
+    // When `recursive` is false we keep only the root group itself
+    // and arrays whose immediate parent is `root_path`. icechunk's
+    // `list_nodes` always returns the full subtree (it's already in
+    // memory), so we filter at materialisation time — the win is
+    // skipping the CPU-bound `Array::new_with_metadata` for arrays
+    // we'd otherwise drop.
+    let root_normalized = normalize_path(root_path);
     let mut groups: BTreeMap<String, NodeData> = BTreeMap::new();
     let mut arrays: Vec<icechunk::format::snapshot::NodeSnapshot> = Vec::new();
     for snap in snapshots {
         match &snap.node_data {
             IceNodeData::Group => {
                 let path = ice_path_to_string(&snap.path);
+                if !recursive && path != root_normalized {
+                    continue;
+                }
                 let attrs = parse_group_attrs(&snap.user_data, &path)?;
                 groups.insert(
                     path.clone(),
@@ -189,7 +222,15 @@ async fn walk_icechunk_session_snapshot(
                     },
                 );
             }
-            IceNodeData::Array { .. } => arrays.push(snap),
+            IceNodeData::Array { .. } => {
+                if !recursive {
+                    let array_path = ice_path_to_string(&snap.path);
+                    if parent_of(&array_path) != root_normalized {
+                        continue;
+                    }
+                }
+                arrays.push(snap);
+            }
         }
     }
 
@@ -205,11 +246,10 @@ async fn walk_icechunk_session_snapshot(
         BTreeMap::new();
     for snap in arrays {
         let array_path = ice_path_to_string(&snap.path);
-        let parent_path = match array_path.rsplit_once('/') {
-            Some(("", _)) | None => "/".to_string(),
-            Some((parent, _)) => parent.to_string(),
-        };
-        by_parent.entry(parent_path).or_default().push(snap);
+        by_parent
+            .entry(parent_of(&array_path))
+            .or_default()
+            .push(snap);
     }
 
     let group_jobs: Vec<(String, Vec<VarMeta>)> =
@@ -253,6 +293,28 @@ async fn walk_icechunk_session_snapshot(
 /// `Display` on `Path` yields the same shape (`"/foo/bar"`).
 fn ice_path_to_string(p: &IcePath) -> String {
     p.to_string()
+}
+
+/// Strip a trailing slash from a non-root path so two equivalent shapes
+/// (`/foo` and `/foo/`) compare equal. Empty input is treated as root.
+fn normalize_path(path: &str) -> String {
+    if path.is_empty() {
+        return "/".to_string();
+    }
+    if path.len() > 1 && path.ends_with('/') {
+        path.trim_end_matches('/').to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Return the parent directory of an absolute Zarr path. The root's
+/// parent is the root itself.
+fn parent_of(path: &str) -> String {
+    match path.rsplit_once('/') {
+        Some(("", _)) | None => "/".to_string(),
+        Some((parent, _)) => parent.to_string(),
+    }
 }
 
 /// Parse a group's `user_data` bytes (the `zarr.json` payload) into a
@@ -604,3 +666,26 @@ impl_eager_element!(u32, U32);
 impl_eager_element!(u64, U64);
 impl_eager_element!(f32, F32);
 impl_eager_element!(f64, F64);
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_path, parent_of};
+
+    #[test]
+    fn normalize_path_handles_root_and_trailing_slash() {
+        assert_eq!(normalize_path("/"), "/");
+        assert_eq!(normalize_path("/foo"), "/foo");
+        assert_eq!(normalize_path("/foo/"), "/foo");
+        assert_eq!(normalize_path("/foo/bar"), "/foo/bar");
+        assert_eq!(normalize_path("/foo/bar/"), "/foo/bar");
+        assert_eq!(normalize_path(""), "/");
+    }
+
+    #[test]
+    fn parent_of_root_and_descendants() {
+        assert_eq!(parent_of("/"), "/");
+        assert_eq!(parent_of("/foo"), "/");
+        assert_eq!(parent_of("/foo/bar"), "/foo");
+        assert_eq!(parent_of("/a/b/c"), "/a/b");
+    }
+}
