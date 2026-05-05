@@ -343,12 +343,11 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # case stays on the fast path (Rust walks only the requested
         # subtree).
         is_glob = group is not None and bool(_GLOB_CHARS.search(group))
-        rust_group = None if is_glob else group
 
         tree = _rust_open(
             source,
             **_build_rust_kwargs(
-                group=rust_group,
+                group=None if is_glob else group,
                 branch=branch,
                 storage_options=storage_options_arg,
                 max_concurrency=max_concurrency,

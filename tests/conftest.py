@@ -50,6 +50,34 @@ def _write_tiny_layout(root: zarr.Group) -> None:
     mask[:] = np.zeros((4, 3), dtype=np.int8)
 
 
+def _write_multilevel_layout(root: zarr.Group) -> None:
+    """Write the 3-level layout shared by `multilevel_zarr_store` and
+    `multilevel_icechunk_repo`. See ``multilevel_zarr_store``'s
+    docstring for the full shape.
+    """
+    root.attrs["title"] = "multilevel"
+    root.create_array("x", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",))[:] = (
+        np.arange(4, dtype=np.float64)
+    )
+
+    volume_a = root.create_group("volume_a")
+    volume_a.attrs["id"] = "A"
+    volume_a.create_array(
+        "temp", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
+    )[:] = np.arange(4, dtype=np.float64)
+
+    for i, angle in enumerate([0.5, 1.5]):
+        sweep = volume_a.create_group(f"sweep_{i}")
+        sweep.attrs["angle"] = angle
+        sweep.create_array(
+            "dbz",
+            shape=(8, 16),
+            dtype="float32",
+            chunks=(8, 16),
+            dimension_names=("azimuth", "range"),
+        )[:] = np.zeros((8, 16), dtype=np.float32)
+
+
 @pytest.fixture
 def tiny_zarr_store(tmp_path: Path) -> Path:
     """Vanilla Zarr v3 store at ``tmp_path/store.zarr``."""
@@ -80,28 +108,7 @@ def multilevel_zarr_store(tmp_path: Path) -> Path:
     """
     path = tmp_path / "store.zarr"
     root = zarr.create_group(store=str(path), zarr_format=3)
-    root.attrs["title"] = "multilevel"
-    root.create_array("x", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",))[:] = (
-        np.arange(4, dtype=np.float64)
-    )
-
-    volume_a = root.create_group("volume_a")
-    volume_a.attrs["id"] = "A"
-    volume_a.create_array(
-        "temp", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
-    )[:] = np.arange(4, dtype=np.float64)
-
-    for i, angle in enumerate([0.5, 1.5]):
-        sweep = volume_a.create_group(f"sweep_{i}")
-        sweep.attrs["angle"] = angle
-        sweep.create_array(
-            "dbz",
-            shape=(8, 16),
-            dtype="float32",
-            chunks=(8, 16),
-            dimension_names=("azimuth", "range"),
-        )[:] = np.zeros((8, 16), dtype=np.float32)
-
+    _write_multilevel_layout(root)
     return path
 
 
@@ -120,32 +127,12 @@ def tiny_icechunk_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def multilevel_icechunk_repo(tmp_path: Path) -> Path:
-    """Multilevel icechunk repo mirroring ``multilevel_zarr_store``'s
-    layout — used for glob-filter parity tests across the icechunk
-    snapshot walker.
-    """
+    """Multilevel icechunk repo with the same layout as ``multilevel_zarr_store``."""
     path = tmp_path / "repo"
     storage = icechunk.local_filesystem_storage(str(path))
     repo = icechunk.Repository.create(storage)
     session = repo.writable_session("main")
     root = zarr.create_group(store=session.store, zarr_format=3)
-    root.attrs["title"] = "multilevel"
-    root.create_array(
-        "x", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
-    )[:] = np.arange(4, dtype=np.float64)
-
-    volume_a = root.create_group("volume_a")
-    volume_a.attrs["id"] = "A"
-    for i, angle in enumerate([0.5, 1.5]):
-        sweep = volume_a.create_group(f"sweep_{i}")
-        sweep.attrs["angle"] = angle
-        sweep.create_array(
-            "dbz",
-            shape=(8, 16),
-            dtype="float32",
-            chunks=(8, 16),
-            dimension_names=("azimuth", "range"),
-        )[:] = np.zeros((8, 16), dtype=np.float32)
-
+    _write_multilevel_layout(root)
     session.commit("init")
     return path

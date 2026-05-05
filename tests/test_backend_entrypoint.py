@@ -268,31 +268,28 @@ def test_open_dataset_glob_group_rejects() -> None:
 # ---- glob group= filter (Phase 8) ----
 
 
-def test_glob_group_matches_descendants(multilevel_zarr_store: Path) -> None:
-    """Glob `group="/*/sweep_0"` should match `/volume_a/sweep_0`
-    only (not `/volume_a/sweep_1`), and the result tree should also
-    include the ancestors `/volume_a` and `/` so DataTree.from_dict
-    sees a well-formed hierarchy. Mirrors xarray PR #11302's
-    semantics."""
+@pytest.mark.parametrize(
+    "pattern, expected",
+    [
+        # Single match → matched leaf + its ancestors.
+        ("/*/sweep_0", ["/", "/volume_a", "/volume_a/sweep_0"]),
+        # Multi-match siblings.
+        (
+            "/*/sweep_*",
+            ["/", "/volume_a", "/volume_a/sweep_0", "/volume_a/sweep_1"],
+        ),
+    ],
+)
+def test_glob_group_matches(
+    multilevel_zarr_store: Path, pattern: str, expected: list[str]
+) -> None:
+    """Glob filter result = matched paths + their ancestors so
+    `DataTree.from_dict` sees a well-formed hierarchy. Mirrors xarray
+    PR #11302's semantics."""
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_0"
+        str(multilevel_zarr_store), engine="rustytree", group=pattern
     )
-    paths = sorted(n.path for n in dt.subtree)
-    assert paths == ["/", "/volume_a", "/volume_a/sweep_0"], paths
-
-
-def test_glob_group_matches_multiple(multilevel_zarr_store: Path) -> None:
-    """Glob `group="/*/sweep_*"` matches both sweeps."""
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_*"
-    )
-    paths = sorted(n.path for n in dt.subtree)
-    assert paths == [
-        "/",
-        "/volume_a",
-        "/volume_a/sweep_0",
-        "/volume_a/sweep_1",
-    ], paths
+    assert sorted(n.path for n in dt.subtree) == expected
 
 
 def test_glob_group_no_matches_returns_empty(multilevel_zarr_store: Path) -> None:
