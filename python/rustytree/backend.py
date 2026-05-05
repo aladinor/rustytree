@@ -146,25 +146,28 @@ _GLOB_CHARS = re.compile(r"[*?\[]")
 
 
 def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
-    """Normalise a literal group path to absolute. Globs are left alone:
-    ``PurePosixPath.match`` treats relative patterns as suffix matches,
-    absolute ones as full-path matches — meaningfully different.
+    """Normalise a literal group path to absolute, canonical form.
+    Globs are left alone: ``PurePosixPath.match`` treats relative
+    patterns as suffix matches, absolute ones as full-path matches —
+    meaningfully different.
 
     Rules:
       - ``None`` → ``None`` (no group selection).
       - Empty string → ``"/"`` (treat as root, matching xarray's
         ``open_*`` convention).
-      - No leading ``/`` → prepend one (icechunk's path validator
-        rejects relative paths outright).
-      - Already absolute → unchanged.
+      - Otherwise: prepend ``/`` if absent, then canonicalise via
+        ``PurePosixPath`` to collapse ``//`` runs and strip trailing
+        slashes. icechunk's path validator and our Rust walk both
+        emit canonical paths; without normalisation, a user-supplied
+        ``/foo//bar`` or ``/foo/`` would miss the lookup.
     """
     if is_glob or group is None:
         return group
     if group == "":
         return ROOT
     if not group.startswith("/"):
-        return "/" + group
-    return group
+        group = "/" + group
+    return str(PurePosixPath(group))
 
 
 def _to_rust_source(filename_or_obj: Any) -> Any:

@@ -467,6 +467,72 @@ def test_open_datatree_empty_group_treated_as_root(
     assert {n.path for n in dt.subtree} == {n.path for n in expected.subtree}
 
 
+def test_open_datatree_literal_group_collapses_double_slash(
+    multilevel_zarr_store: Path,
+) -> None:
+    """A literal `group="/volume_a//sweep_0"` should resolve the same
+    as `/volume_a/sweep_0`. The `//` collapse fix in Rust's
+    `GlobPredicate::parse` covered globs only; without the matching
+    Python-side `PurePosixPath` canonicalisation, the user-supplied
+    path stays as `/volume_a//sweep_0` while Rust marshals nodes
+    with the canonical form, missing the lookup → `KeyError`. End-
+    to-end smoke caught this; this regression test pins the fix.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a//sweep_0",
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    # `_reroot` strips `/volume_a/sweep_0` so the leaf lands at "/".
+    assert paths == ["/"], paths
+
+
+def test_open_datatree_literal_group_strips_trailing_slash(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`group="/volume_a/"` (trailing slash) should resolve the same
+    as `/volume_a`. PurePosixPath strips trailing slashes."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/volume_a/"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == ["/", "/sweep_0", "/sweep_1"], paths
+
+
+def test_glob_group_character_class(multilevel_zarr_store: Path) -> None:
+    """`PurePosixPath.match` supports `[...]` character classes; the
+    fixture has `sweep_0` and `sweep_1` so `[01]` should match both.
+    Our Rust prune bails to "no prune" for patterns containing `[`
+    (the Python filter remains authoritative), so this test exercises
+    the fallback path."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_[01]"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == [
+        "/",
+        "/volume_a",
+        "/volume_a/sweep_0",
+        "/volume_a/sweep_1",
+    ], paths
+
+
+def test_glob_group_question_mark(multilevel_zarr_store: Path) -> None:
+    """`PurePosixPath.match` supports `?` as single-char wildcard.
+    Same Rust-prune bail-out as `[...]` — exercises the fallback."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_?"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == [
+        "/",
+        "/volume_a",
+        "/volume_a/sweep_0",
+        "/volume_a/sweep_1",
+    ], paths
+
+
 def test_open_datatree_missing_literal_group_raises_icechunk(
     multilevel_icechunk_repo: Path,
 ) -> None:
