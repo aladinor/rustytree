@@ -13,6 +13,70 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- `RustytreeBackendEntrypoint.open_datatree` + `open_dataset` end-to-end
+  ([#15]). The headline `xr.open_datatree(URL, engine="rustytree", ...)`
+  API now returns a real `xr.DataTree` instead of raising
+  `NotImplementedError`. Validated against `s3://nexrad-arco/KLOT`
+  (107 groups, anonymous icechunk, cold-cache release build):
+  **2,071 ms** rustytree vs 47,608 ms `engine="zarr"` → **23×**
+  end-to-end speedup, with full structural + value parity checked
+  across all 107 nodes. CF decoding (`decode_times`, `mask_and_scale`,
+  `decode_coords`, etc.), pandas indexes (`.sel(vcp_time="...")`
+  works), and scalar/1-D coord values all match `engine="zarr"`.
+  Three structural pieces close the gap:
+  1. **Parallel eager fanout for self-named dim coords** (`src/walk.rs`
+     Phase C). After the existing discover + open phases, the walk
+     identifies `var.dims == [var.name]` 1-D coords across every node,
+     fan-outs `array.async_retrieve_array_subset_elements::<T>` via
+     `try_join_all` against the same tokio runtime + 32-permit
+     semaphore, and stuffs the results into a new
+     `EagerElements` enum on `VarMeta`. xarray's
+     `_maybe_create_default_indexes` post-pass then finds resident
+     numpy data instead of triggering N×serial RTTs through our lazy
+     backend. Skips coords > 1 M elements (size cap). New
+     `src/dtype_dispatch.rs` module exports a
+     `for_each_supported_dtype!` macro shared between `read_subset`
+     and the eager fanout to avoid 11-arm drift.
+  2. **Metadata-only datetime dtype inference** (Python monkey-patch
+     in `_metadata_only_datetime_dtype`). xarray's
+     `_decode_cf_datetime_dtype` peeks `arr[0]` and `arr[-1]` per CF
+     time variable to call `decode_cf_datetime(example, units, ...)`
+     and return `result.dtype`. We swap the function for the duration
+     of `decode_cf_variables`: synthesise `np.array([0, 0])` with the
+     variable's int dtype, run the same `decode_cf_datetime` call, and
+     return the resulting dtype — same answer, no chunk read. Falls
+     back to the original peeking implementation on exception so
+     malformed-units error reporting stays accurate. Defensively
+     guarded — if xarray ever moves/renames the function (e.g. when
+     PR #11304 lands upstream), the patch becomes a no-op rather than
+     raising. To be removed once rustytree's xarray floor moves past
+     PR #11304.
+  3. **Sparse-chunk handling in `read_subset`** (`src/array.rs`).
+     zarrs's `async_retrieve_chunk_subset_opt` slow-path bypasses the
+     `fill_value` fallback when a chunk doesn't exist in storage —
+     critical for icechunk arrays where chunks are sparse. Workaround:
+     align every read request to chunk-grid boundaries, which forces
+     zarrs's per-chunk fast path (`async_retrieve_chunk_opt`) that
+     does handle missing chunks. Slice the chunk-aligned result down
+     to the requested range via a new `slice_nd` helper.
+
+  Other entrypoint plumbing: re-roots the returned `DataTree` at the
+  `group=` argument to match xarray's subtree contract; `open_dataset`
+  delegates to `open_datatree` and pulls `tree.dataset`. Six new
+  `tests/test_eager_fetch.py` tests cover the predicate, data
+  round-trip, oversized fallback, and end-to-end "no extra reads via
+  the lazy backend" assertion. Nine new `tests/test_backend_entrypoint.py`
+  tests verify parity vs `engine="zarr"` on the tiny + multilevel +
+  icechunk fixtures using `xr.testing.assert_identical`. Stale
+  `NotImplementedError("Phase 4")` stub removed; Phase 1 scaffold
+  tests trimmed.
+  The entrypoint calls `_rustytree.open_datatree(...)` for the
+  metadata, then for each group: wraps every var's `ZarrsArrayHandle`
+  as `LazilyIndexedArray(RustyBackendArray(handle))`, builds raw
+  `xr.Variable`s, runs `xr.conventions.decode_cf_variables(...)` over
+  them (so `mask_and_scale` / `decode_times` / `decode_coords` /
+  `decode_timedelta` / `concat_characters` / `use_cftime` /
+  `drop_variables` behave the same as `engine="zarr"`), splits decoded
 - Lazy `ZarrsArrayHandle` + `RustyBackendArray` for chunk reads ([#14]):
   every var dict produced by `_rustytree.open_datatree(...)` now carries
   a `"handle"` key holding a `ZarrsArrayHandle` PyO3 class. The handle
@@ -188,3 +252,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#12]: https://github.com/aladinor/rustytree/pull/12
 [#13]: https://github.com/aladinor/rustytree/pull/13
 [#14]: https://github.com/aladinor/rustytree/pull/14
+[#15]: https://github.com/aladinor/rustytree/pull/15

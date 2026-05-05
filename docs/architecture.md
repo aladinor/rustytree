@@ -115,27 +115,38 @@ rustytree/
 ## Open path
 
 ```text
-Python: xr.open_datatree(filename_or_obj, engine="rustytree", branch="main", ...)
+Python: xr.open_datatree(filename_or_obj, engine="rustytree", ...)
    │
    ▼  (xarray plugin loader → entry point)
-RustytreeBackendEntrypoint.open_datatree
-   │
-   ├──── Inspect filename_or_obj type at the Python boundary
+RustytreeBackendEntrypoint.open_datatree           [python/rustytree/backend.py]
    │
    ▼  (one PyO3 call, GIL released around block_on)
-_rustytree.open_datatree(...)
+_rustytree.open_datatree(path, *, group, branch, storage_options, max_concurrency)
    │
-   ▼  Rust: runtime.block_on(walk::open_datatree(...))
-1. store::build_store(...)                       → Arc<dyn AsyncReadable…>
-2. walk::recursive(store, root, semaphore)       → Vec<NodeData>
-   (try_join_all over list_dir + Group::async_open + Array::async_open)
-3. For each NodeData: parallel fetch of 1D self-named coordinate chunks
-4. Build PyDict { path: PyNodeData {...} }
+   ▼  Rust: runtime.block_on(...)
+1. store build:
+     • probe HEAD <prefix>/repo  ──┐
+     • Repository::open           ──┼─── tokio::join! (PR #13)
+     • readonly_session              │
+2. walk::walk_recursive(store, root, semaphore)    → Vec<NodeData>
+     • discover_paths (recursive Box::pin + try_join_all over siblings)
+     • per-group open_single (Group::async_open + per-array fan-out)
+3. Build PyDict[path → {path, attrs, vars: [{name, dims, dtype, shape, attrs, handle}]}]
    │
-   ▼  Back in Python
-5. _decode.node_to_dataset(node) for each path
-6. datatree_from_dict_with_io_cleanup(groups_dict)  → xr.DataTree
+   ▼  Back in Python (RustytreeBackendEntrypoint, PR #15)
+4. For each (path, node):
+     • Wrap each var's `handle` as RustyBackendArray
+     • LazilyIndexedArray(RustyBackendArray(handle))
+     • Variable(dims, data, attrs)
+     • xr.conventions.decode_cf_variables(...)
+     • Split into data_vars / coord_vars
+     • xr.Dataset(data_vars, coords, attrs)
+5. datatree_from_dict_with_io_cleanup(groups)      → xr.DataTree
 ```
+
+When the caller passes `group=/foo`, the rust walk surfaces absolute
+paths (`/foo`, `/foo/bar`, …) and the entrypoint re-roots them at `/`
+to match xarray's subtree contract.
 
 ## Performance targets
 
@@ -152,12 +163,18 @@ not yet implemented):
 | --- | --- | --- | --- |
 | KLOT-xradar (local icechunk, 12 groups, warm-cache) | `xr.open_datatree(..., engine="zarr", consolidated=False)` | 213.3 ms | — |
 | KLOT-xradar (local icechunk, 12 groups, warm-cache) | `_rustytree.open_datatree(...)` (recursive walk) | 81.5 ms | **2.62×** |
-| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `xr.open_datatree(session.store, engine="zarr", consolidated=False)` | 50,370 ms | — |
-| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, debug build) | `_rustytree.open_datatree(...)` (recursive walk) | 1,557 ms | **32.4×** |
-| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release build) | `_rustytree.open_datatree(...)` (recursive walk) | 843 ms | **60×** |
-| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release + parallel probe) | `_rustytree.open_datatree(...)` ([#13]) | **563 ms** | **89×** |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `xr.open_datatree(session.store, engine="zarr", consolidated=False)` | 47,608 ms | — |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release + parallel probe) | `_rustytree.open_datatree(...)` ([#13]) | 569 ms | 84× |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release + Phase 5 entrypoint + eager dim coords + metadata-only datetime) | `xr.open_datatree(URL, engine="rustytree", ...)` ([#15]) | **2,071 ms** | **23×** |
 
-The S3 win has two stacked drivers:
+The Phase 5 entrypoint number (2,071 ms) is the headline-API number
+through `xr.open_datatree(engine="rustytree", ...)`, including
+xarray's CF decoding, default-index construction, and per-node
+`Dataset` assembly. Structural + value parity vs `engine="zarr"` is
+verified across all 107 nodes (paths, dims, scalar coords, attrs,
+`vcp_time` `DatetimeIndex` with `.sel(...)` working).
+
+The S3 win has four stacked drivers:
 
 - **Cross-group parallelism**: xarray opens 107 groups sequentially
   through `IcechunkStore`'s `SyncMixin`, paying ~470 ms per group for
@@ -167,10 +184,23 @@ The S3 win has two stacked drivers:
 - **Probe pipelining ([#13])**: the icechunk-vs-vanilla auto-detect
   HEAD on `<prefix>/repo` (~260 ms cold-cache TLS+DNS+TCP) now races
   alongside `Repository::open` instead of running before it.
+- **Parallel eager fanout for self-named dim coords ([#15])**:
+  xarray's `_maybe_create_default_indexes` post-pass reads every
+  self-named 1-D coord on every node to build pandas Index objects.
+  Left lazy that's N×serial RTTs through our backend; pre-fetched in
+  parallel from Rust (gated on the same 32-permit semaphore) it's
+  resident memory by the time xarray touches it.
+- **Metadata-only datetime dtype inference ([#15])**: a context-
+  manager monkey-patch around `decode_cf_variables` swaps xarray's
+  `_decode_cf_datetime_dtype` for a version that synthesises example
+  values instead of peeking `arr[0]` and `arr[-1]`. Mirrors xarray
+  PR #11304's idea; removable once that lands upstream.
 
 Per-array eager opens (today's `open_single` opens every array to
-populate `VarMeta`) are the ceiling on further wins — the lazy
-`BackendArray` PR removes that cost from the open path entirely.
+populate `VarMeta`) are still the ceiling on further wins on the
+warm-cache path — the lazy `BackendArray` PR (#14) removes that cost
+from the lazy chunk-read side; the icechunk snapshot fast path
+(Phase 4 / part 2) would close it on the open side too.
 
 ## Lazy chunk reads
 

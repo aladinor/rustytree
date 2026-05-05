@@ -9,14 +9,16 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use numpy::PyArray1;
 use pyo3::Bound;
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::Value as JsonValue;
 
 mod array;
+mod dtype_dispatch;
 mod error;
 mod icechunk_store;
 mod node;
@@ -27,7 +29,7 @@ mod walk;
 
 use crate::array::ZarrsArrayHandle;
 use crate::error::Result;
-use crate::node::{NodeData, VarMeta};
+use crate::node::{EagerElements, NodeData, VarMeta};
 use crate::url::StoreSpec;
 
 /// Open a Zarr v3 store at `path` and return a metadata snapshot of every
@@ -167,7 +169,39 @@ fn var_to_pydict<'py>(py: Python<'py>, var: &VarMeta) -> PyResult<Bound<'py, PyD
     dict.set_item("attrs", attrs_to_pydict(py, &var.attrs)?)?;
     let handle = ZarrsArrayHandle::new(var.array.clone(), runtime::handle().handle().clone());
     dict.set_item("handle", Py::new(py, handle)?)?;
+    if let Some(eager) = &var.eager {
+        let arr = eager_to_pyarray(py, eager, &var.shape)?;
+        dict.set_item("data", arr)?;
+    }
     Ok(dict)
+}
+
+/// Marshal an `EagerElements` into a Python numpy ndarray reshaped to
+/// the variable's full shape. Called from `var_to_pydict` when the
+/// walk's Phase C pre-fetched the array's contents.
+fn eager_to_pyarray<'py>(
+    py: Python<'py>,
+    eager: &EagerElements,
+    shape: &[u64],
+) -> PyResult<Bound<'py, PyAny>> {
+    // 1-D `PyArray1::from_slice` materialises the data; numpy's
+    // `reshape` then gives us the natural N-D view that xarray expects
+    // when constructing a `Variable` with this as `data`.
+    let flat = match eager {
+        EagerElements::Bool(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::I8(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::I16(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::I32(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::I64(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::U8(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::U16(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::U32(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::U64(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::F32(v) => PyArray1::from_slice(py, v).into_any(),
+        EagerElements::F64(v) => PyArray1::from_slice(py, v).into_any(),
+    };
+    let shape_tuple = PyTuple::new(py, shape)?;
+    flat.call_method1("reshape", (shape_tuple,))
 }
 
 fn attrs_to_pydict<'py>(
