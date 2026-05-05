@@ -11,6 +11,20 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- Pipeline the S3 icechunk-vs-vanilla probe with `Repository::open`
+  ([#13]): the auto-detect HEAD on `<prefix>/repo` previously ran
+  sequentially before the icechunk open, paying a full TLS + DNS + TCP
+  handshake (~260 ms cold-cache against AWS) on top of the actual repo
+  open (~302 ms). They now run concurrently via `tokio::join!`; if the
+  probe rules out icechunk we drop the in-flight icechunk open and fall
+  back to vanilla. Wall = max(probe, icechunk_open) instead of probe +
+  icechunk_open. Cold-cache profile against `s3://nexrad-arco/KLOT`
+  (107 groups, release build): **843 ms → 563 ms (33% faster)**.
+  Vanilla S3 stores pay one wasted icechunk open whose error is
+  discarded — acceptable cost for preserving the auto-detect contract.
+
 ### Added
 
 - Recursive multi-node walk ([#12]): `_rustytree.open_datatree` now
@@ -146,3 +160,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#10]: https://github.com/aladinor/rustytree/pull/10
 [#11]: https://github.com/aladinor/rustytree/pull/11
 [#12]: https://github.com/aladinor/rustytree/pull/12
+[#13]: https://github.com/aladinor/rustytree/pull/13

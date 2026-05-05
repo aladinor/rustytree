@@ -78,18 +78,31 @@ fn open_datatree<'py>(
             let store = match &spec {
                 StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
                 StoreSpec::S3 { bucket, prefix } => {
-                    // Probe for icechunk's on-prefix layout (one HEAD on
-                    // `<prefix>/repo`) before picking the backend. Same
-                    // auto-detect contract as the local-fs path.
-                    if store::s3_is_icechunk(bucket, prefix, &options).await? {
-                        icechunk_store::open_s3_icechunk(
-                            bucket,
-                            prefix,
-                            branch.as_deref().unwrap_or("main"),
-                            &options,
-                        )
-                        .await?
+                    // Auto-detect icechunk vs vanilla layout via one HEAD on
+                    // `<prefix>/repo`. Cold-cache that probe pays full TLS +
+                    // DNS + TCP setup (~260 ms on AWS). To keep wall under
+                    // probe + icechunk_open, race the probe against the
+                    // icechunk open; if the probe rules out icechunk we drop
+                    // the in-flight open. The wasted icechunk request on
+                    // vanilla paths is the cost of preserving the auto-
+                    // detect contract — the alternative (try-icechunk-then-
+                    // fall-back) couples error handling to icechunk's
+                    // string-typed errors.
+                    let probe_fut = store::s3_is_icechunk(bucket, prefix, &options);
+                    let icechunk_fut = icechunk_store::open_s3_icechunk(
+                        bucket,
+                        prefix,
+                        branch.as_deref().unwrap_or("main"),
+                        &options,
+                    );
+                    let (probe_res, icechunk_res) = tokio::join!(probe_fut, icechunk_fut);
+                    if probe_res? {
+                        icechunk_res?
                     } else {
+                        // Vanilla path; drop whatever the icechunk attempt
+                        // produced (likely a manifest-missing error) and
+                        // build the plain object_store-backed S3 store.
+                        drop(icechunk_res);
                         store::build_vanilla_s3(bucket, prefix, &options)?
                     }
                 }
