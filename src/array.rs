@@ -24,6 +24,8 @@ use zarrs::array::{Array, DataType};
 use zarrs::array_subset::ArraySubset;
 use zarrs_storage::AsyncReadableListableStorageTraits;
 
+use crate::dtype_dispatch::for_each_supported_dtype;
+
 /// A handle to an already-opened `zarrs::Array` that can read array
 /// subsets back to `NumPy`.
 ///
@@ -108,46 +110,75 @@ impl ZarrsArrayHandle {
                 )));
             }
         }
-        let std_ranges: Vec<std::ops::Range<u64>> = ranges.iter().map(|(s, e)| *s..*e).collect();
-        let subset = ArraySubset::new_with_ranges(&std_ranges);
 
-        // Dispatch on dtype: each branch decodes into the matching
-        // primitive type and hands a 1-D `NumPy` array back to Python.
-        // The Python adapter reshapes; doing it here would force every
-        // dtype to materialise an ndarray crate type, which costs an
-        // extra dependency for no benefit.
+        // Align the requested ranges to chunk-grid boundaries so each
+        // chunk read goes through zarrs's `async_retrieve_chunk_opt`
+        // fast path (which falls back to the array's `fill_value` when
+        // a chunk is missing from storage). The slow path
+        // `async_retrieve_chunk_subset_opt` does NOT do that fallback —
+        // it asks the storage directly via `AsyncStoragePartialDecoder`
+        // and propagates the icechunk `ChunkNotFound` error. By
+        // expanding the read to whole chunks we bypass that bug; we
+        // then slice the result down to what was actually asked for.
+        // Cost: over-fetches when the request is much smaller than a
+        // chunk, but that's usually a CF-decode peek and the over-fetch
+        // is a single chunk worth of data.
+        // Upstream: https://github.com/LDeakin/zarrs (chunk subset
+        // partial-decode bypasses fill_value fallback).
+        let chunk_shape_nz = self
+            .array
+            .chunk_shape(&vec![0; self.array.dimensionality()])
+            .map_err(|err| {
+                PyValueError::new_err(format!("zarrs: chunk_shape lookup failed: {err}"))
+            })?;
+        let chunk_shape: Vec<u64> = chunk_shape_nz.iter().map(|n| n.get()).collect();
+
+        let mut aligned_ranges: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+        let mut request_offsets_in_aligned: Vec<u64> = Vec::with_capacity(ranges.len());
+        let mut request_shape: Vec<u64> = Vec::with_capacity(ranges.len());
+        let mut aligned_shape: Vec<u64> = Vec::with_capacity(ranges.len());
+        for (i, (start, stop)) in ranges.iter().enumerate() {
+            let cs = chunk_shape[i].max(1);
+            let aligned_start = (start / cs) * cs;
+            let aligned_stop_unbounded = stop.div_ceil(cs) * cs;
+            let aligned_stop = aligned_stop_unbounded.min(shape[i]);
+            aligned_ranges.push((aligned_start, aligned_stop));
+            request_offsets_in_aligned.push(start - aligned_start);
+            request_shape.push(stop - start);
+            aligned_shape.push(aligned_stop - aligned_start);
+        }
+        let aligned_std_ranges: Vec<std::ops::Range<u64>> =
+            aligned_ranges.iter().map(|(s, e)| *s..*e).collect();
+        let subset = ArraySubset::new_with_ranges(&aligned_std_ranges);
+
+        // Dispatch on dtype via the shared macro: each branch decodes
+        // into the matching primitive type and hands a 1-D `NumPy`
+        // array back to Python. The Python adapter reshapes; doing it
+        // here would force every dtype to materialise an ndarray crate
+        // type, which costs an extra dependency for no benefit.
         let dtype = self.array.data_type().clone();
         let array = self.array.clone();
         let runtime = self.runtime.clone();
 
-        macro_rules! read_as {
-            ($ty:ty) => {{
-                let elements: Vec<$ty> = py.detach(|| -> PyResult<Vec<$ty>> {
-                    runtime
-                        .block_on(array.async_retrieve_array_subset_elements::<$ty>(&subset))
-                        .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
-                })?;
-                PyArray1::from_vec(py, elements).into_bound_py_any(py)
-            }};
-        }
-
-        match dtype {
-            DataType::Bool => read_as!(bool),
-            DataType::Int8 => read_as!(i8),
-            DataType::Int16 => read_as!(i16),
-            DataType::Int32 => read_as!(i32),
-            DataType::Int64 => read_as!(i64),
-            DataType::UInt8 => read_as!(u8),
-            DataType::UInt16 => read_as!(u16),
-            DataType::UInt32 => read_as!(u32),
-            DataType::UInt64 => read_as!(u64),
-            DataType::Float32 => read_as!(f32),
-            DataType::Float64 => read_as!(f64),
-            other => Err(PyNotImplementedError::new_err(format!(
+        for_each_supported_dtype!(dtype, T => {
+            let elements: Vec<T> = py.detach(|| -> PyResult<Vec<T>> {
+                runtime
+                    .block_on(array.async_retrieve_array_subset_elements::<T>(&subset))
+                    .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
+            })?;
+            let sliced = slice_nd(
+                elements,
+                &aligned_shape,
+                &request_offsets_in_aligned,
+                &request_shape,
+            );
+            PyArray1::from_vec(py, sliced).into_bound_py_any(py)
+        }, other => {
+            Err(PyNotImplementedError::new_err(format!(
                 "rustytree: dtype {other:?} is not yet supported by ZarrsArrayHandle.read_subset; \
                  supported today: bool, int{{8,16,32,64}}, uint{{8,16,32,64}}, float{{32,64}}"
-            ))),
-        }
+            )))
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -156,6 +187,75 @@ impl ZarrsArrayHandle {
             self.array.shape(),
             zarrs_dtype_to_numpy_str(self.array.data_type())
         )
+    }
+}
+
+/// Slice an N-dimensional row-major buffer down to a hyperrectangle.
+///
+/// `elements` is a flat row-major buffer of shape `aligned_shape`; we
+/// extract a contiguous-in-the-trailing-axes sub-rectangle starting at
+/// `offsets` with shape `out_shape`. Used by `read_subset` to slice a
+/// chunk-aligned read down to the actually-requested ranges.
+fn slice_nd<T: Copy>(
+    elements: Vec<T>,
+    aligned_shape: &[u64],
+    offsets: &[u64],
+    out_shape: &[u64],
+) -> Vec<T> {
+    debug_assert_eq!(aligned_shape.len(), offsets.len());
+    debug_assert_eq!(aligned_shape.len(), out_shape.len());
+    // Fast path: the aligned read already matches the request (common
+    // when the request is itself chunk-aligned, e.g. full-array reads).
+    let identity = aligned_shape == out_shape && offsets.iter().all(|o| *o == 0);
+    if identity {
+        return elements;
+    }
+    // Use usize internally — we're indexing into a `Vec<T>` so values
+    // fit usize by construction (zarrs allocated this Vec, so it cannot
+    // be larger than the address space).
+    let aligned_shape: Vec<usize> = aligned_shape
+        .iter()
+        .map(|n| usize::try_from(*n).expect("aligned_shape fits usize"))
+        .collect();
+    let offsets: Vec<usize> = offsets
+        .iter()
+        .map(|n| usize::try_from(*n).expect("offset fits usize"))
+        .collect();
+    let out_shape: Vec<usize> = out_shape
+        .iter()
+        .map(|n| usize::try_from(*n).expect("out_shape fits usize"))
+        .collect();
+    let total_out: usize = out_shape.iter().product();
+    let mut out: Vec<T> = Vec::with_capacity(total_out);
+    // Row-major strides for the aligned (source) buffer.
+    let n = aligned_shape.len();
+    let mut src_strides = vec![1_usize; n];
+    for i in (0..n.saturating_sub(1)).rev() {
+        src_strides[i] = src_strides[i + 1] * aligned_shape[i + 1];
+    }
+    // Walk the output shape in row-major order, computing the source
+    // index for each destination element.
+    let mut idx = vec![0_usize; n];
+    loop {
+        let mut src = 0_usize;
+        for i in 0..n {
+            src += (offsets[i] + idx[i]) * src_strides[i];
+        }
+        out.push(elements[src]);
+        // Increment the multidim index in row-major (last-axis-first)
+        // order. Loop exits when the carry rolls past axis 0.
+        let mut axis = n;
+        loop {
+            if axis == 0 {
+                return out;
+            }
+            axis -= 1;
+            idx[axis] += 1;
+            if idx[axis] < out_shape[axis] {
+                break;
+            }
+            idx[axis] = 0;
+        }
     }
 }
 

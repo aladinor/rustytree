@@ -1,8 +1,14 @@
-"""Phase 1 scaffold contract: entry point resolves, stubs raise NotImplementedError."""
+"""Plugin-discovery contract.
+
+Phase 1 originally locked the scaffold's stub behaviour
+(NotImplementedError). Phase 5 wired `open_datatree` and `open_dataset`
+end-to-end, so the stub assertion was retired; what remains is the
+plugin-discovery surface (entrypoint resolves, supports_groups True,
+guess_can_open False).
+"""
 
 from __future__ import annotations
 
-import pytest
 import xarray as xr
 
 import rustytree
@@ -32,10 +38,3 @@ def test_supports_groups_advertised() -> None:
 def test_guess_can_open_returns_false() -> None:
     ep = RustytreeBackendEntrypoint()
     assert ep.guess_can_open("anything.zarr") is False
-
-
-@pytest.mark.parametrize("method", ["open_dataset", "open_datatree", "open_groups_as_dict"])
-def test_python_stubs_raise_not_implemented(method: str) -> None:
-    ep = RustytreeBackendEntrypoint()
-    with pytest.raises(NotImplementedError):
-        getattr(ep, method)("s3://fake/path")

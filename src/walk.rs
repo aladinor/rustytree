@@ -14,11 +14,19 @@ use std::sync::Arc;
 use futures::future::try_join_all;
 use tokio::sync::Semaphore;
 use zarrs::array::Array;
+use zarrs::array_subset::ArraySubset;
 use zarrs::group::Group;
-use zarrs_storage::AsyncReadableListableStorage;
+use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTraits};
 
+use crate::dtype_dispatch::for_each_supported_dtype;
 use crate::error::{Result, RustytreeError};
-use crate::node::{NodeData, VarMeta};
+use crate::node::{EagerElements, NodeData, VarMeta};
+
+/// Cap on element count for eager pre-fetching. Coords / time-likes
+/// larger than this stay lazy — at 1 M elements an int64 coord is 8 MB,
+/// already a meaningful cold-cache cost we don't want to pay
+/// unconditionally during open. Tunable later if profiles say so.
+const EAGER_FETCH_MAX_ELEMENTS: u64 = 1 << 20;
 
 /// Open a single group and capture its metadata + that of its child arrays.
 pub(crate) async fn open_single(
@@ -82,7 +90,16 @@ pub(crate) async fn walk_recursive(
     // All groups' metadata in parallel. Each `open_single` itself fans
     // out per-array work via `try_join_all`, so this gives true two-level
     // concurrency.
-    let nodes = try_join_all(paths.iter().map(|p| open_single(&store, p))).await?;
+    let mut nodes = try_join_all(paths.iter().map(|p| open_single(&store, p))).await?;
+
+    // Phase C: eager-fetch values for vars that xarray's per-node CF
+    // decoders + Index construction will read anyway (1-D self-named
+    // dim coords + CF time-likes). Doing it here in parallel turns
+    // hundreds of serialised lazy-backend reads into one bounded
+    // `try_join_all` against the same tokio runtime. See
+    // `should_eager_fetch` for the predicate.
+    eager_phase(&semaphore, &mut nodes).await?;
+
     Ok(nodes)
 }
 
@@ -202,5 +219,156 @@ async fn open_array_meta(
         shape,
         attrs,
         array: Arc::new(array),
+        eager: None,
     })
 }
+
+/// Decide whether a var's values should be pre-fetched during the walk
+/// rather than deferred to xarray's lazy backend.
+///
+/// Triggers:
+///   - **1-D self-named dim coord** (`var.dims == [var.name]`): xarray
+///     promotes these into `Index` objects; index construction reads
+///     the values, which would otherwise hit our lazy backend
+///     once-per-coord-per-node.
+///   - **CF time-like** (`attrs["units"]` is a string containing
+///     `" since "`): xarray's `_decode_cf_datetime_dtype` peeks the
+///     first and last element of every such variable to infer dtype.
+///     That's 2 RTTs/var × N vars × N nodes serialised through our
+///     lazy backend — the dominant cost on cold-cache S3.
+///
+/// Skip if total elements > `EAGER_FETCH_MAX_ELEMENTS` (1 M) — guards
+/// against accidentally pulling a multi-GB array that just happens to
+/// match the heuristic.
+fn should_eager_fetch(var: &VarMeta) -> bool {
+    // `shape` is empty for 0-D scalars; `iter().product()` gives 1.
+    let n_elements: u64 = if var.shape.is_empty() {
+        1
+    } else {
+        var.shape.iter().product()
+    };
+    if n_elements > EAGER_FETCH_MAX_ELEMENTS {
+        return false;
+    }
+    // Self-named 1-D dim coord: xarray's `_maybe_create_default_indexes`
+    // post-pass reads these on every node to construct pandas Index
+    // objects. Pre-fetching here turns N×serial into one bounded
+    // `try_join_all` against the same tokio runtime. CF time-likes
+    // are NOT pre-fetched anymore — the metadata-only patch in
+    // `backend.py` handles them without reading any chunks.
+    var.dims.len() == 1 && var.dims[0] == var.name
+}
+
+/// Read the entire array's elements eagerly. Used by Phase C to
+/// materialise small coord/time arrays so xarray's CF decoders see
+/// resident numpy data instead of triggering chunk reads through our
+/// lazy backend. Bounded by the same semaphore the walk uses, so this
+/// can't stampede the underlying `object_store` client.
+async fn fetch_all_elements(
+    array: &Arc<Array<dyn AsyncReadableListableStorageTraits>>,
+) -> Result<EagerElements> {
+    let subset = ArraySubset::new_with_shape(array.shape().to_vec());
+    let dtype = array.data_type().clone();
+    for_each_supported_dtype!(dtype, T => {
+        let elements: Vec<T> = array
+            .async_retrieve_array_subset_elements::<T>(&subset)
+            .await
+            .map_err(|err| {
+                RustytreeError::Other(format!("eager fetch failed: {err}"))
+            })?;
+        Ok(eager_from_vec(elements))
+    }, other => {
+        // Unsupported dtype — skip eagerly; the var stays lazy. The
+        // caller treats this `Err` as "leave eager=None and continue".
+        Err(RustytreeError::Other(format!(
+            "eager fetch: dtype {other:?} not yet supported"
+        )))
+    })
+}
+
+/// One eager-fetch task: source coords + the array to read.
+type EagerTask = (
+    usize,
+    usize,
+    Arc<Array<dyn AsyncReadableListableStorageTraits>>,
+);
+
+/// Run the eager fetch over every eligible (node, var) pair, in
+/// parallel, and assign the results back into `nodes` in place.
+async fn eager_phase(semaphore: &Arc<Semaphore>, nodes: &mut [NodeData]) -> Result<()> {
+    // Build the work list while still holding `&nodes` immutably; we
+    // assign results via (node_idx, var_idx) so the borrow doesn't
+    // need to outlive the await points.
+    let mut work: Vec<EagerTask> = Vec::new();
+    for (ni, node) in nodes.iter().enumerate() {
+        for (vi, var) in node.vars.iter().enumerate() {
+            if should_eager_fetch(var) {
+                work.push((ni, vi, var.array.clone()));
+            }
+        }
+    }
+    if work.is_empty() {
+        return Ok(());
+    }
+
+    // Each task acquires a permit so total in-flight reads (across
+    // discover_paths, open_single, and Phase C) stay bounded by
+    // `max_concurrency`. The permit is held for the full read.
+    let results = try_join_all(work.into_iter().map(|(ni, vi, array)| {
+        let sem = Arc::clone(semaphore);
+        async move {
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|_| RustytreeError::Other("eager phase: semaphore closed".into()))?;
+            // Best-effort: an unsupported-dtype error here just means
+            // the var stays lazy. Leak everything else as a real
+            // error so the open call fails cleanly.
+            match fetch_all_elements(&array).await {
+                Ok(elements) => Ok::<_, RustytreeError>((ni, vi, Some(elements))),
+                Err(_) => Ok::<_, RustytreeError>((ni, vi, None)),
+            }
+        }
+    }))
+    .await?;
+
+    for (ni, vi, eager) in results {
+        if let Some(eager) = eager {
+            nodes[ni].vars[vi].eager = Some(eager);
+        }
+    }
+    Ok(())
+}
+
+/// Wrap a typed `Vec<T>` in the matching `EagerElements` variant. The
+/// dispatch is by Rust type, so the caller sees `EagerElements` without
+/// having to inspect the original `DataType` again.
+fn eager_from_vec<T: EagerElementType>(v: Vec<T>) -> EagerElements {
+    T::wrap(v)
+}
+
+trait EagerElementType: Sized {
+    fn wrap(v: Vec<Self>) -> EagerElements;
+}
+
+macro_rules! impl_eager_element {
+    ($t:ty, $variant:ident) => {
+        impl EagerElementType for $t {
+            fn wrap(v: Vec<Self>) -> EagerElements {
+                EagerElements::$variant(v)
+            }
+        }
+    };
+}
+
+impl_eager_element!(bool, Bool);
+impl_eager_element!(i8, I8);
+impl_eager_element!(i16, I16);
+impl_eager_element!(i32, I32);
+impl_eager_element!(i64, I64);
+impl_eager_element!(u8, U8);
+impl_eager_element!(u16, U16);
+impl_eager_element!(u32, U32);
+impl_eager_element!(u64, U64);
+impl_eager_element!(f32, F32);
+impl_eager_element!(f64, F64);
