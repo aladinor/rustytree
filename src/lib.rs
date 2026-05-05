@@ -62,6 +62,13 @@ use crate::url::StoreSpec;
 /// operations (default 32). Per-array fan-out within each group is
 /// independent of this cap.
 ///
+/// `recursive` (default `true`) controls whether the walk descends past
+/// `group`. With `recursive=false` the result contains exactly one
+/// node — the requested group itself, with its arrays. The Python
+/// `open_dataset` path auto-selects `recursive=false` for literal-group
+/// opens so a single-Dataset request doesn't pay for siblings it
+/// discards. Glob `group=` patterns require `recursive=true`.
+///
 /// The returned dict is keyed by absolute group path:
 ///
 /// ```text
@@ -73,7 +80,7 @@ use crate::url::StoreSpec;
 /// }
 /// ```
 #[pyfunction]
-#[pyo3(signature = (source, *, group = None, branch = None, storage_options = None, max_concurrency = None))]
+#[pyo3(signature = (source, *, group = None, branch = None, storage_options = None, max_concurrency = None, recursive = None))]
 fn open_datatree<'py>(
     py: Python<'py>,
     source: &Bound<'_, PyAny>,
@@ -81,9 +88,11 @@ fn open_datatree<'py>(
     branch: Option<&str>,
     storage_options: Option<&Bound<'_, PyDict>>,
     max_concurrency: Option<usize>,
+    recursive: Option<bool>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let group_path = group.unwrap_or("/").to_string();
     let max_concurrency_val = max_concurrency;
+    let recursive_val = recursive.unwrap_or(true);
 
     // Branch on input type: `bytes` = icechunk session handoff;
     // `str`/`Path` = local path or vanilla Zarr v3 URL.
@@ -96,6 +105,7 @@ fn open_datatree<'py>(
                     store::WalkSource::Icechunk(bundle),
                     &group_path,
                     max_concurrency_val,
+                    recursive_val,
                 )
                 .await
             })
@@ -129,7 +139,7 @@ fn open_datatree<'py>(
                     store::WalkSource::Vanilla(store::build_vanilla_s3(bucket, prefix, &options)?)
                 }
             };
-            walk::walk_recursive(walk_source, &group_path, max_concurrency_val).await
+            walk::walk_recursive(walk_source, &group_path, max_concurrency_val, recursive_val).await
         })
     })?;
 

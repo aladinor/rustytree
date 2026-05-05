@@ -160,6 +160,111 @@ def test_rusty_data_store_satisfies_abstract_data_store(tiny_zarr_store: Path) -
     assert store.close() is None
 
 
+# ---- non-recursive walk (Phase 5/part 3) ----
+
+
+def test_open_dataset_literal_group_skips_descendants(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`open_dataset(group=literal_path)` must not walk descendants of
+    that path — they'd be discarded anyway. Verify by calling Rust
+    directly with `recursive=False` and asserting the result has
+    exactly one node, then by exercising the entrypoint and confirming
+    parity with engine="zarr".
+    """
+    from rustytree._rustytree import open_datatree as _rust_open
+
+    # Direct Rust call: recursive=False must return only the requested node.
+    tree = _rust_open(
+        str(multilevel_zarr_store), group="/volume_a", recursive=False
+    )
+    assert list(tree.keys()) == ["/volume_a"], tree.keys()
+
+    # End-to-end: open_dataset must return the same Dataset as engine="zarr".
+    rusty = xr.open_dataset(
+        str(multilevel_zarr_store), engine="rustytree", group="/volume_a"
+    )
+    zarr_ds = xr.open_dataset(
+        str(multilevel_zarr_store),
+        engine="zarr",
+        consolidated=False,
+        group="/volume_a",
+    )
+    xr.testing.assert_identical(rusty, zarr_ds)
+
+
+def test_open_dataset_root_skips_descendants(multilevel_zarr_store: Path) -> None:
+    """`open_dataset(URL)` (no group) returns root's Dataset; with
+    Phase 5/part 3 it should not pay for the descendants either.
+    Same parity check.
+    """
+    rusty = xr.open_dataset(str(multilevel_zarr_store), engine="rustytree")
+    zarr_ds = xr.open_dataset(
+        str(multilevel_zarr_store), engine="zarr", consolidated=False
+    )
+    xr.testing.assert_identical(rusty, zarr_ds)
+
+
+def test_open_dataset_leaf_group(multilevel_zarr_store: Path) -> None:
+    """`open_dataset(group=deep_leaf)` is the headline use case for
+    Phase 5/part 3 — opens just that one leaf, no siblings."""
+    rusty = xr.open_dataset(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a/sweep_0",
+    )
+    zarr_ds = xr.open_dataset(
+        str(multilevel_zarr_store),
+        engine="zarr",
+        consolidated=False,
+        group="/volume_a/sweep_0",
+    )
+    xr.testing.assert_identical(rusty, zarr_ds)
+
+
+def test_open_datatree_still_walks_recursively(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`open_datatree` is the tree-shaped API and must still recurse —
+    Phase 5/part 3 is scoped to `open_dataset` only."""
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree")
+    # Multilevel fixture produces 3+ nodes; if recursion were disabled
+    # we'd get only the root.
+    assert sum(1 for _ in dt.subtree) > 1
+
+
+def test_open_dataset_icechunk_literal_group(tiny_icechunk_repo: Path) -> None:
+    """Exercise the icechunk `recursive=false` filter path: open a
+    single group from an icechunk repo via `open_dataset` and assert
+    parity with `engine="zarr"` over the same session.store. Without
+    this the new `walk_icechunk_session_snapshot` filter (group
+    path-equality + array `parent_of` predicate) would be untested.
+    """
+    import icechunk
+
+    rusty = xr.open_dataset(str(tiny_icechunk_repo), engine="rustytree")
+
+    storage = icechunk.local_filesystem_storage(str(tiny_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+    zarr_ds = xr.open_dataset(session.store, engine="zarr", consolidated=False)
+
+    xr.testing.assert_identical(rusty, zarr_ds)
+
+
+def test_open_dataset_glob_group_rejects() -> None:
+    """Glob `group=` patterns aren't meaningful for `open_dataset`
+    (multi-match, single-Dataset return). The entrypoint should raise
+    NotImplementedError pointing the user at `open_datatree` rather
+    than KeyError'ing through the literal-key lookup."""
+    with pytest.raises(NotImplementedError, match="open_datatree"):
+        xr.open_dataset(
+            "/nonexistent",  # never reached; glob check is first
+            engine="rustytree",
+            group="*/sweep_0",
+        )
+
+
 # ---- KTWX smoke (network-free) ----
 
 KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
