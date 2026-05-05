@@ -13,6 +13,47 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- icechunk snapshot fast-path for metadata walk ([#19]).
+  `walk_recursive` is now a dispatcher: for icechunk inputs it routes
+  to a new `walk_icechunk_session_snapshot` that reads
+  `Session::list_nodes(...)` (in-memory snapshot tree, no I/O after
+  the user-side `Repository::open`) and projects each `NodeSnapshot`
+  into `NodeData` / `VarMeta` directly. zarrs's `Array` objects are
+  constructed via `Array::new_with_metadata` (synchronous, no I/O)
+  using the `user_data` payload from the snapshot, parallelised
+  across parent groups via `spawn_blocking + try_join_all` so
+  per-array codec/chunk-grid construction overlaps. Vanilla Zarr v3
+  inputs continue to use the existing zarrs-based walker.
+
+  Profiled on `s3://nexrad-arco/KLOT` (107 groups + 1300 arrays,
+  cold-cache, release):
+
+  ```
+              before #19    after #19
+  metadata walk:  ~1500 ms     356 ms   (-76%)
+  eager_phase:    ~1170 ms    ~1170 ms   (unchanged — separate bottleneck)
+  python decode:   455 ms      455 ms
+  TOTAL:          ~2100 ms    ~2000 ms
+  ```
+
+  The 1.1s metadata-walk speedup is the structural win. The
+  eager_phase (243 coord-chunk reads through `AsyncIcechunkStore`)
+  remains the dominant cost at ~1.17s; tracking as a follow-up
+  (Phase 4/part 3) — bypassing `AsyncIcechunkStore::get` to read
+  chunks directly via `Session::get_chunk` would eliminate the
+  per-call Store-wrapper rebuild + `RwLock<Session>` contention.
+
+  Refactor surface:
+  - `IcechunkBundle { session, store }` replaces the bare
+    `AsyncReadableListableStorage` for icechunk inputs — both handles
+    needed (session for the fast-path metadata walk, store for lazy
+    chunk reads).
+  - `WalkSource::{Icechunk, Vanilla}` enum gates the walker dispatch.
+  - `bundle_from_session_bytes` replaces the old
+    `store_from_session_bytes`; same FFI shape, returns the bundle.
+  - All 66 existing tests pass unchanged (parity with the old
+    walker is byte-identical from a `NodeData`/`VarMeta` standpoint).
+
 - PR #17 audit-driven cleanup ([#18]): three small follow-ups
   surfaced by retrospectively running the audit chain against the
   merged PR #17 diff. None block correctness; bundled here so the
@@ -329,3 +370,6 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#14]: https://github.com/aladinor/rustytree/pull/14
 [#15]: https://github.com/aladinor/rustytree/pull/15
 [#16]: https://github.com/aladinor/rustytree/pull/16
+[#17]: https://github.com/aladinor/rustytree/pull/17
+[#18]: https://github.com/aladinor/rustytree/pull/18
+[#19]: https://github.com/aladinor/rustytree/pull/19
