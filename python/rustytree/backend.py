@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import re
 from collections.abc import Iterable, Iterator
+from pathlib import PurePosixPath
 from typing import Any
 
 import numpy as np
@@ -188,6 +189,20 @@ def _to_rust_source(filename_or_obj: Any) -> Any:
     return str(filename_or_obj)
 
 
+def _filter_by_glob(tree: dict[str, Any], pattern: str) -> dict[str, Any]:
+    """Filter ``{path: NodeData}`` by glob, mirroring xarray PR #11302.
+
+    Uses ``PurePosixPath.match`` and auto-includes every ancestor of a
+    matched path so ``DataTree.from_dict`` sees a well-formed hierarchy.
+    """
+    matched = {p for p in tree if PurePosixPath(p).match(pattern)}
+    keep: set[str] = set(matched)
+    for p in matched:
+        for ancestor in PurePosixPath(p).parents:
+            keep.add(str(ancestor))
+    return {path: node for path, node in tree.items() if path in keep}
+
+
 def _reroot(groups: dict[str, Dataset], root: str) -> dict[str, Dataset]:
     """Strip `root` from every absolute path, anchoring the result at "/"
     to match `xr.open_datatree(group=...)`'s subtree contract."""
@@ -322,15 +337,26 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         else:
             storage_options_arg = storage_options
 
+        # Glob `group=` (xarray PR #11302 semantics): walk the full tree
+        # on the Rust side, then filter the result dict via
+        # `PurePosixPath.match` + ancestor inclusion. The literal-path
+        # case stays on the fast path (Rust walks only the requested
+        # subtree).
+        is_glob = group is not None and bool(_GLOB_CHARS.search(group))
+        rust_group = None if is_glob else group
+
         tree = _rust_open(
             source,
             **_build_rust_kwargs(
-                group=group,
+                group=rust_group,
                 branch=branch,
                 storage_options=storage_options_arg,
                 max_concurrency=max_concurrency,
             ),
         )
+
+        if is_glob:
+            tree = _filter_by_glob(tree, group)
 
         groups: dict[str, Dataset] = {
             path: _node_to_dataset(
@@ -345,7 +371,10 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
             )
             for path, node in tree.items()
         }
-        if group and group != ROOT:
+        # Reroot only for literal subtree paths. Glob results stay
+        # rooted at "/" because the matched paths span ancestors that
+        # may not share a common non-root prefix.
+        if group and group != ROOT and not is_glob:
             groups = _reroot(groups, group)
         return datatree_from_dict_with_io_cleanup(groups)
 

@@ -116,3 +116,36 @@ def tiny_icechunk_repo(tmp_path: Path) -> Path:
     _write_tiny_layout(root)
     session.commit("init")
     return path
+
+
+@pytest.fixture
+def multilevel_icechunk_repo(tmp_path: Path) -> Path:
+    """Multilevel icechunk repo mirroring ``multilevel_zarr_store``'s
+    layout — used for glob-filter parity tests across the icechunk
+    snapshot walker.
+    """
+    path = tmp_path / "repo"
+    storage = icechunk.local_filesystem_storage(str(path))
+    repo = icechunk.Repository.create(storage)
+    session = repo.writable_session("main")
+    root = zarr.create_group(store=session.store, zarr_format=3)
+    root.attrs["title"] = "multilevel"
+    root.create_array(
+        "x", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
+    )[:] = np.arange(4, dtype=np.float64)
+
+    volume_a = root.create_group("volume_a")
+    volume_a.attrs["id"] = "A"
+    for i, angle in enumerate([0.5, 1.5]):
+        sweep = volume_a.create_group(f"sweep_{i}")
+        sweep.attrs["angle"] = angle
+        sweep.create_array(
+            "dbz",
+            shape=(8, 16),
+            dtype="float32",
+            chunks=(8, 16),
+            dimension_names=("azimuth", "range"),
+        )[:] = np.zeros((8, 16), dtype=np.float32)
+
+    session.commit("init")
+    return path

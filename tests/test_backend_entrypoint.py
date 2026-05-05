@@ -265,6 +265,87 @@ def test_open_dataset_glob_group_rejects() -> None:
         )
 
 
+# ---- glob group= filter (Phase 8) ----
+
+
+def test_glob_group_matches_descendants(multilevel_zarr_store: Path) -> None:
+    """Glob `group="/*/sweep_0"` should match `/volume_a/sweep_0`
+    only (not `/volume_a/sweep_1`), and the result tree should also
+    include the ancestors `/volume_a` and `/` so DataTree.from_dict
+    sees a well-formed hierarchy. Mirrors xarray PR #11302's
+    semantics."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_0"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == ["/", "/volume_a", "/volume_a/sweep_0"], paths
+
+
+def test_glob_group_matches_multiple(multilevel_zarr_store: Path) -> None:
+    """Glob `group="/*/sweep_*"` matches both sweeps."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_*"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == [
+        "/",
+        "/volume_a",
+        "/volume_a/sweep_0",
+        "/volume_a/sweep_1",
+    ], paths
+
+
+def test_glob_group_no_matches_returns_empty(multilevel_zarr_store: Path) -> None:
+    """A glob with no matches returns a DataTree with just an empty
+    root node. Mirrors xarray PR #11302 behaviour."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_99"
+    )
+    paths = [n.path for n in dt.subtree]
+    assert paths == ["/"], paths
+    assert len(dt.dataset.data_vars) == 0
+
+
+def test_glob_data_round_trip(multilevel_zarr_store: Path) -> None:
+    """Filtered tree's data should match the stock zarr engine's view
+    of the same paths — confirms we're not mangling node contents."""
+    rusty = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_0"
+    )
+    zarr_dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="zarr", consolidated=False
+    )
+    for path in ("/volume_a/sweep_0",):
+        xr.testing.assert_identical(rusty[path].dataset, zarr_dt[path].dataset)
+
+
+def test_glob_group_icechunk(multilevel_icechunk_repo: Path) -> None:
+    """Glob filtering must work against the icechunk snapshot walker
+    too — the filter is post-walk in Python today, so this exercises
+    that path. Locks the parity now so a future Rust-side icechunk
+    glob optimisation can't regress silently.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_icechunk_repo), engine="rustytree", group="/*/sweep_0"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == ["/", "/volume_a", "/volume_a/sweep_0"], paths
+
+
+def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
+    """A relative pattern (no leading `/`) matches any path suffix.
+    `*/sweep_0` should match `/volume_a/sweep_0` (the leading-slash
+    component is unnamed). Documents the semantics inherited from
+    `PurePosixPath.match` so a future tightening of validation
+    surfaces here first.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_0"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert "/volume_a/sweep_0" in paths, paths
+
+
 # ---- KTWX smoke (network-free) ----
 
 KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
