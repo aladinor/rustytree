@@ -4,7 +4,8 @@
 //! `open_datatree` `PyO3` function. Supported inputs today: local-filesystem
 //! paths (icechunk + vanilla Zarr v3) and `s3://` URLs (icechunk + vanilla,
 //! auto-detected via a HEAD probe on `<prefix>/repo`). The walk is
-//! recursive and parallel; lazy chunk reads ship in follow-up PRs.
+//! recursive and parallel; each variable carries a `ZarrsArrayHandle`
+//! that defers chunk reads until xarray asks for them.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -15,6 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use serde_json::Value as JsonValue;
 
+mod array;
 mod error;
 mod icechunk_store;
 mod node;
@@ -23,6 +25,7 @@ mod store;
 mod url;
 mod walk;
 
+use crate::array::ZarrsArrayHandle;
 use crate::error::Result;
 use crate::node::{NodeData, VarMeta};
 use crate::url::StoreSpec;
@@ -162,6 +165,8 @@ fn var_to_pydict<'py>(py: Python<'py>, var: &VarMeta) -> PyResult<Bound<'py, PyD
     dict.set_item("dtype", &var.dtype)?;
     dict.set_item("shape", &var.shape)?;
     dict.set_item("attrs", attrs_to_pydict(py, &var.attrs)?)?;
+    let handle = ZarrsArrayHandle::new(var.array.clone(), runtime::handle().handle().clone());
+    dict.set_item("handle", Py::new(py, handle)?)?;
     Ok(dict)
 }
 
@@ -217,5 +222,6 @@ fn json_to_py<'py>(py: Python<'py>, value: &JsonValue) -> PyResult<Bound<'py, Py
 #[pymodule]
 fn _rustytree(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_datatree, m)?)?;
+    m.add_class::<ZarrsArrayHandle>()?;
     Ok(())
 }

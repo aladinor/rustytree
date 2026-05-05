@@ -157,7 +157,9 @@ fn clone_attrs(
     map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
-/// Open one array and project its metadata into a `VarMeta`.
+/// Open one array and project its metadata into a `VarMeta`. The opened
+/// array is kept alive in an `Arc` so `ZarrsArrayHandle` can read chunks
+/// later without re-opening.
 async fn open_array_meta(
     store: &AsyncReadableListableStorage,
     array_path: String,
@@ -189,11 +191,16 @@ async fn open_array_meta(
         },
     );
 
+    let dtype = format!("{}", array.data_type());
+    let shape = array.shape().to_vec();
+    let attrs = clone_attrs(array.attributes());
+
     Ok(VarMeta {
         name,
         dims,
-        dtype: format!("{}", array.data_type()),
-        shape: array.shape().to_vec(),
-        attrs: clone_attrs(array.attributes()),
+        dtype,
+        shape,
+        attrs,
+        array: Arc::new(array),
     })
 }

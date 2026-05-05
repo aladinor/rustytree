@@ -50,9 +50,21 @@ def test_var_metadata_matches_vanilla(tiny_icechunk_repo: Path) -> None:
 
 
 def test_explicit_main_branch_is_default(tiny_icechunk_repo: Path) -> None:
+    # Compare metadata only; var dicts now carry a ZarrsArrayHandle that uses
+    # identity comparison so two equal opens would fall out of equality.
+    def metadata_only(tree: dict) -> dict:
+        return {
+            path: {
+                "path": node["path"],
+                "attrs": node["attrs"],
+                "vars": [{k: v for k, v in var.items() if k != "handle"} for var in node["vars"]],
+            }
+            for path, node in tree.items()
+        }
+
     a = open_datatree(str(tiny_icechunk_repo))
     b = open_datatree(str(tiny_icechunk_repo), branch="main")
-    assert a == b
+    assert metadata_only(a) == metadata_only(b)
 
 
 def test_unknown_branch_raises(tiny_icechunk_repo: Path) -> None:

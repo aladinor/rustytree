@@ -9,10 +9,30 @@ sweep groups.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from rustytree._rustytree import open_datatree
+
+
+def _metadata_only(tree: dict) -> dict:
+    """Return a copy of `tree` with each var's ``handle`` stripped.
+
+    The handle is a `ZarrsArrayHandle` PyO3 object and uses identity
+    comparison, so two structurally-equal trees from separate
+    ``open_datatree`` calls would compare unequal at the var level even
+    though their *metadata* matches. Tests that assert behavioural
+    equivalence across kwargs use this to compare metadata only.
+    """
+    out: dict[str, Any] = {}
+    for path, node in tree.items():
+        out[path] = {
+            "path": node["path"],
+            "attrs": node["attrs"],
+            "vars": [{k: v for k, v in var.items() if k != "handle"} for var in node["vars"]],
+        }
+    return out
 
 
 def test_open_returns_dict_keyed_by_path(tiny_zarr_store: Path) -> None:
@@ -54,7 +74,7 @@ def test_var_metadata_shape_and_dims(tiny_zarr_store: Path) -> None:
 def test_explicit_group_root_is_default(tiny_zarr_store: Path) -> None:
     a = open_datatree(str(tiny_zarr_store))
     b = open_datatree(str(tiny_zarr_store), group="/")
-    assert a == b
+    assert _metadata_only(a) == _metadata_only(b)
 
 
 def test_file_url_scheme_accepted(tiny_zarr_store: Path) -> None:
@@ -96,9 +116,9 @@ def test_max_concurrency_kwarg_accepted(tiny_zarr_store: Path) -> None:
     # the cap (the work fits inside any reasonable bound for a 1-group
     # tree). Verifies the kwarg is plumbed through without affecting
     # correctness.
-    a = open_datatree(str(tiny_zarr_store))
-    b = open_datatree(str(tiny_zarr_store), max_concurrency=1)
-    c = open_datatree(str(tiny_zarr_store), max_concurrency=128)
+    a = _metadata_only(open_datatree(str(tiny_zarr_store)))
+    b = _metadata_only(open_datatree(str(tiny_zarr_store), max_concurrency=1))
+    c = _metadata_only(open_datatree(str(tiny_zarr_store), max_concurrency=128))
     assert a == b == c
 
 
