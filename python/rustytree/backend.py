@@ -164,12 +164,13 @@ def _to_rust_source(filename_or_obj: Any) -> Any:
 
     if icechunk is not None:
         # An icechunk Session has `._session` (a PySession with as_bytes).
+        # `PySession.as_bytes()` already returns `bytes`, so no wrap.
         if isinstance(filename_or_obj, icechunk.Session):
-            return bytes(filename_or_obj._session.as_bytes())
+            return filename_or_obj._session.as_bytes()
         # An IcechunkStore (i.e. `session.store`) wraps a PyStore
         # whose `.session` is the same PySession.
         if isinstance(filename_or_obj, icechunk.IcechunkStore):
-            return bytes(filename_or_obj._store.session.as_bytes())
+            return filename_or_obj._store.session.as_bytes()
 
     # Anything else: assume str/Path-like.
     return str(filename_or_obj)

@@ -1,0 +1,94 @@
+"""Unit tests for ``_to_rust_source``.
+
+`backend.py::_to_rust_source` is the single dispatch site that decides
+whether the user gave us an icechunk Session/IcechunkStore (in which
+case we serialise to msgpack bytes for the Rust side) or a path/URL
+(passed straight through as a string). Each input type is exercised
+here so a future regression in the dispatch — e.g. an icechunk
+attribute rename, or accidentally swallowing a non-string non-icechunk
+input — surfaces in unit tests rather than in the integration paths.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import icechunk
+import pytest
+
+from rustytree.backend import _to_rust_source
+
+
+def test_session_input_returns_bytes(tiny_icechunk_repo: Path) -> None:
+    storage = icechunk.local_filesystem_storage(str(tiny_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+
+    out = _to_rust_source(session)
+    assert isinstance(out, bytes)
+    assert len(out) > 0
+
+
+def test_icechunk_store_input_returns_bytes(tiny_icechunk_repo: Path) -> None:
+    storage = icechunk.local_filesystem_storage(str(tiny_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+
+    out = _to_rust_source(session.store)
+    assert isinstance(out, bytes)
+    assert len(out) > 0
+
+
+def test_session_and_store_produce_equivalent_bytes(tiny_icechunk_repo: Path) -> None:
+    """Both the `Session` and the `IcechunkStore` should serialise to the
+    same underlying PySession bytes — they wrap the same inner state.
+    """
+    storage = icechunk.local_filesystem_storage(str(tiny_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+
+    via_session = _to_rust_source(session)
+    via_store = _to_rust_source(session.store)
+    assert via_session == via_store
+
+
+def test_str_input_returns_str() -> None:
+    out = _to_rust_source("/some/local/path")
+    assert isinstance(out, str)
+    assert out == "/some/local/path"
+
+
+def test_pathlib_path_returns_str(tmp_path: Path) -> None:
+    out = _to_rust_source(tmp_path)
+    assert isinstance(out, str)
+    assert out == str(tmp_path)
+
+
+def test_unknown_object_falls_back_to_str() -> None:
+    """Non-icechunk, non-string objects get coerced via `str(...)`. This
+    matches xarray's permissive `filename_or_obj` contract — the actual
+    Rust dispatch will fail at the type check there with a clear error
+    if the resulting string isn't a valid URL/path."""
+
+    class Custom:
+        def __str__(self) -> str:
+            return "custom://opaque"
+
+    out = _to_rust_source(Custom())
+    assert isinstance(out, str)
+    assert out == "custom://opaque"
+
+
+def test_works_when_icechunk_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the user doesn't have icechunk installed, `_to_rust_source`
+    must still handle the str/Path branch — the icechunk import is
+    deferred precisely to allow this. We simulate the missing import
+    by unloading the module before calling."""
+    import sys
+
+    # Drop icechunk from sys.modules so the deferred import inside
+    # `_to_rust_source` raises ImportError.
+    monkeypatch.setitem(sys.modules, "icechunk", None)
+
+    out = _to_rust_source("/path/with/no/icechunk")
+    assert out == "/path/with/no/icechunk"

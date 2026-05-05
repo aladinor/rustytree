@@ -13,6 +13,29 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- PR #17 audit-driven cleanup ([#18]): three small follow-ups
+  surfaced by retrospectively running the audit chain against the
+  merged PR #17 diff. None block correctness; bundled here so the
+  full-development-path audit workflow stays honest.
+  - Drop redundant `bytes(... .as_bytes())` wrap in
+    `_to_rust_source` — `PySession.as_bytes()` already returns
+    `bytes`; the outer wrap was dead code.
+  - Add typed `RustytreeError::IcechunkSession(SessionError)`
+    variant (`#[from]` from `icechunk::session::SessionError`).
+    `store_from_session_bytes` now propagates with `?` instead of
+    formatting through `RustytreeError::Other(String)`. Maps to
+    `ValueError` on the Python side (caller-supplied bytes were
+    bad), grouped with `InvalidInput` to keep the existing
+    contract.
+  - New `tests/test_to_rust_source.py` (7 tests) exercises every
+    input shape: `icechunk.Session`, `icechunk.IcechunkStore`, str,
+    `pathlib.Path`, an arbitrary object that fall-back-coerces via
+    `str(...)`, and the path where `icechunk` isn't importable. Plus
+    a Rust unit test (`display_icechunk_session_wraps_underlying`)
+    confirming the typed error variant carries the underlying
+    `SessionError` and renders with the `"icechunk session: "`
+    prefix.
+
 - **Breaking**: drop the `s3://` URL icechunk dispatch ([#16]).
   `xr.open_datatree("s3://bucket/prefix", engine="rustytree")` no
   longer auto-detects icechunk repos — users must construct the
