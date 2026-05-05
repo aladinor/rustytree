@@ -50,21 +50,31 @@ icechunk reframes the bottleneck profile:
 
 `engine="rustytree"` resolves both icechunk and vanilla Zarr v3 stores
 polymorphically at the store boundary, the same way `engine="zarr"` does
-today (icechunk's Python `IcechunkStore` implements zarr-python's Store
-protocol).
+today. After Phase 7 (PR #16), the input contract is **symmetric with
+xarray's stock `engine="zarr"`**: users construct an icechunk
+`Session` themselves and pass `session.store`. URL dispatch for
+*remote* icechunk has been removed — users have full control over
+branch / credentials / cache via the icechunk Python API.
 
 | `filename_or_obj` | Rust store impl |
 | --- | --- |
+| `icechunk.IcechunkStore` (i.e. `session.store`) | `PySession.as_bytes()` → `Session::from_bytes` → `AsyncIcechunkStore` |
+| `icechunk.Session` directly | same path; `session._session.as_bytes()` |
 | Local path to an icechunk repo (auto-detected) | `Repository::open` → `readonly_session` → `AsyncIcechunkStore` |
-| `s3://` URL to an icechunk repo (auto-detected) | `icechunk::storage::new_s3_storage` → `Repository::open` → `AsyncIcechunkStore` |
-| Local or `s3://` URL to a plain Zarr v3 store | `zarrs_object_store::AsyncObjectStore` |
-| Python `IcechunkStore` / `Session` (later) | unwrap to icechunk `Session` → `AsyncIcechunkStore` |
-| `MutableMapping` / fsspec object (later) | fall back to `zarrs_object_store` |
+| Local path / `s3://` URL to a plain Zarr v3 store | `zarrs_object_store::AsyncObjectStore` |
 
 Detection cues:
-- **Local**: `<root>/repo` file + `<root>/snapshots/` directory → icechunk.
-- **S3**: one HEAD on `<prefix>/repo` → 200 means icechunk, 404 means vanilla Zarr v3.
-- **GCS / Azure / HTTP**: same HEAD-probe pattern; lands with the next remote-stores PR.
+- **Python object**: `isinstance(obj, icechunk.{Session,IcechunkStore})` → bytes-roundtrip path.
+- **Local string**: `<root>/repo` file + `<root>/snapshots/` directory → icechunk; otherwise vanilla Zarr v3.
+- **`s3://` string**: vanilla Zarr v3 only. Remote icechunk requires an explicit `Session`.
+- **GCS / Azure / HTTP**: not yet supported (Phase 6/3).
+
+The cross-extension Session unwrap goes through `PySession.as_bytes()`
+(msgpack-serde) and `icechunk::session::Session::from_bytes()`. Both
+crates link the same `icechunk = "2"` so the format matches. PyO3 type
+extraction can't reach across cdylibs, so the bytes path is the only
+way to hand a live Session from icechunk-python to rustytree without
+re-opening the repo.
 
 ## Module map (target layout)
 

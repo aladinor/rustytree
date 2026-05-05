@@ -1,12 +1,19 @@
 //! icechunk-backed Zarr v3 store.
 //!
-//! Builds an `AsyncReadableListableStorage` from an icechunk repository on
-//! local filesystem so the rest of the walk code stays polymorphic over
-//! icechunk and vanilla object_store-backed stores.
+//! Two construction paths:
+//!   - [`open_local_icechunk`]: open an icechunk repository from a
+//!     local-filesystem path. Convenience for zero-credential local dev.
+//!   - [`store_from_session_bytes`]: rehydrate a `Session` from msgpack
+//!     bytes produced by `icechunk-python`'s `PySession.as_bytes()`. The
+//!     primary path: users construct the icechunk Session themselves
+//!     (with whatever branch / credentials / cache config they want),
+//!     then hand `session.store` to xarray; we cross the FFI boundary by
+//!     unwrapping the Python `IcechunkStore` to bytes.
 //!
-//! Remote icechunk storage (S3 / GCS / Azure / HTTP via icechunk's storage
-//! factories) and Python-side `IcechunkStore`/`Session` unwrap land in
-//! follow-up PRs.
+//! The remote-S3 icechunk URL dispatch that lived here through PR #15
+//! has been removed (Phase 7 redesign): users construct an
+//! `icechunk.Repository.open(s3_storage_factory)` themselves rather
+//! than passing a `s3://` URL to rustytree.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,9 +21,8 @@ use std::sync::Arc;
 
 use icechunk::Repository;
 use icechunk::repository::VersionInfo;
-use icechunk::storage::{
-    S3Credentials, S3Options, S3StaticCredentials, new_local_filesystem_storage, new_s3_storage,
-};
+use icechunk::session::Session;
+use icechunk::storage::new_local_filesystem_storage;
 use zarrs_icechunk::AsyncIcechunkStore;
 use zarrs_storage::AsyncReadableListableStorage;
 
@@ -68,129 +74,32 @@ pub(crate) async fn open_local_icechunk(
     Ok(Arc::new(AsyncIcechunkStore::new(session)))
 }
 
-/// Open an icechunk repository on S3 and produce a zarrs-compatible store
-/// rooted at the given branch.
+/// Rehydrate an `icechunk::session::Session` from the msgpack bytes
+/// produced by `icechunk-python`'s `PySession.as_bytes()` and wrap it
+/// as a zarrs-compatible store.
 ///
-/// `options` accepts the same fsspec/xarray-style keys we recognise on the
-/// vanilla S3 path (see `store::apply_s3_option`); they're translated into
-/// icechunk's `S3Options` + `S3Credentials` shape here. `anon=True`
-/// (alias `skip_signature=True`) maps to `S3Credentials::Anonymous`;
-/// `access_key_id` + `secret_access_key` map to a `Static` credential
-/// triple. Otherwise icechunk picks up creds from the AWS env / IAM role.
-pub(crate) async fn open_s3_icechunk(
-    bucket: &str,
-    prefix: &str,
-    branch: &str,
-    options: &HashMap<String, String>,
-) -> Result<AsyncReadableListableStorage> {
-    let (config, credentials) = parse_s3_options(options)?;
-    let prefix = if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix.to_string())
-    };
-
-    let storage =
-        new_s3_storage(config, bucket.to_string(), prefix.clone(), credentials).map_err(|err| {
-            RustytreeError::Other(format!(
-                "icechunk: failed to build S3 storage for s3://{bucket}/{}: {err}",
-                prefix.as_deref().unwrap_or("")
-            ))
-        })?;
-
-    let repo = Repository::open(None, storage, HashMap::new())
-        .await
-        .map_err(|err| {
-            RustytreeError::Other(format!(
-                "icechunk: failed to open S3 repository at s3://{bucket}/{}: {err}",
-                prefix.as_deref().unwrap_or("")
-            ))
-        })?;
-
-    let version = VersionInfo::BranchTipRef(branch.to_string());
-    let session = repo.readonly_session(&version).await.map_err(|err| {
+/// This is the cross-extension handoff: `PyO3` type extraction can't reach
+/// across cdylibs, but the bytes serialisation is `pub` icechunk API
+/// (using `rmp_serde`). We deserialise with `Session::from_bytes` —
+/// which is the inverse of what `PySession::as_bytes` calls — so the
+/// reconstructed session is byte-identical to the user's. Read-only:
+/// any uncommitted writes the user made on the live session are
+/// discarded by `as_bytes` (they're not part of the serialised state),
+/// which is exactly what we want for a read-side metadata walk.
+///
+/// Caveats:
+///   - The bytes format is icechunk-internal (rmp_serde-encoded
+///     `Session`). Format stability is bounded by icechunk's semver;
+///     we pin `icechunk = "2"` and CI must keep `icechunk` and
+///     `icechunk-python` versions matched.
+pub(crate) fn store_from_session_bytes(bytes: &[u8]) -> Result<AsyncReadableListableStorage> {
+    let session = Session::from_bytes(bytes).map_err(|err| {
         RustytreeError::Other(format!(
-            "icechunk: failed to open readonly session on branch {branch} \
-             at s3://{bucket}/{}: {err}",
-            prefix.as_deref().unwrap_or("")
+            "icechunk: failed to reconstruct Session from bytes ({} bytes): {err}",
+            bytes.len()
         ))
     })?;
-
     Ok(Arc::new(AsyncIcechunkStore::new(session)))
-}
-
-/// Translate fsspec/xarray-style options into icechunk's `S3Options` +
-/// `S3Credentials`. Recognised keys mirror the vanilla S3 path; unknown
-/// keys are rejected so typos surface as `ValueError`.
-fn parse_s3_options(
-    options: &HashMap<String, String>,
-) -> Result<(S3Options, Option<S3Credentials>)> {
-    let mut config = S3Options {
-        region: None,
-        endpoint_url: None,
-        anonymous: false,
-        allow_http: false,
-        force_path_style: false,
-        network_stream_timeout_seconds: None,
-        requester_pays: false,
-    };
-
-    let mut access_key_id: Option<String> = None;
-    let mut secret_access_key: Option<String> = None;
-    let mut session_token: Option<String> = None;
-    let mut anonymous = false;
-
-    let bool_opt = |key: &str, value: &str| -> Result<bool> {
-        match value {
-            "true" | "True" | "1" | "yes" => Ok(true),
-            "false" | "False" | "0" | "no" => Ok(false),
-            other => Err(RustytreeError::InvalidInput(format!(
-                "s3 storage option `{key}` expects a boolean, got {other:?}"
-            ))),
-        }
-    };
-
-    for (key, value) in options {
-        match key.as_str() {
-            "region" => config.region = Some(value.clone()),
-            "endpoint" => config.endpoint_url = Some(value.clone()),
-            "allow_http" => config.allow_http = bool_opt(key, value)?,
-            "skip_signature" | "anon" => anonymous = bool_opt(key, value)?,
-            "access_key_id" => access_key_id = Some(value.clone()),
-            "secret_access_key" => secret_access_key = Some(value.clone()),
-            "session_token" => session_token = Some(value.clone()),
-            other => {
-                return Err(RustytreeError::InvalidInput(format!(
-                    "unknown s3 storage option: `{other}`"
-                )));
-            }
-        }
-    }
-
-    config.anonymous = anonymous;
-
-    let credentials = match (anonymous, access_key_id, secret_access_key) {
-        (true, _, _) => Some(S3Credentials::Anonymous),
-        (false, Some(access_key_id), Some(secret_access_key)) => {
-            Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id,
-                secret_access_key,
-                session_token,
-                expires_after: None,
-            }))
-        }
-        // No anon, no static creds → let icechunk default to FromEnv.
-        (false, None, None) => None,
-        // Partial static credentials are a clear caller mistake.
-        (false, Some(_), None) | (false, None, Some(_)) => {
-            return Err(RustytreeError::InvalidInput(
-                "s3 storage_options: access_key_id and secret_access_key must be set together"
-                    .into(),
-            ));
-        }
-    };
-
-    Ok((config, credentials))
 }
 
 #[cfg(test)]
@@ -228,86 +137,9 @@ mod tests {
         assert!(!looks_like_icechunk_repo(path));
     }
 
-    fn opts(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
     #[test]
-    fn parse_s3_options_empty_yields_default_config_and_from_env_creds() {
-        let (config, creds) = parse_s3_options(&HashMap::new()).expect("empty options ok");
-        assert_eq!(config.region, None);
-        assert_eq!(config.endpoint_url, None);
-        assert!(!config.anonymous);
-        assert!(!config.allow_http);
-        // None means "fall back to FromEnv inside icechunk".
-        assert!(creds.is_none());
-    }
-
-    #[test]
-    fn parse_s3_options_anon_yields_anonymous_credentials() {
-        let (config, creds) = parse_s3_options(&opts(&[("anon", "true")])).expect("ok");
-        assert!(config.anonymous);
-        assert!(matches!(creds, Some(S3Credentials::Anonymous)));
-    }
-
-    #[test]
-    fn parse_s3_options_skip_signature_is_alias_for_anon() {
-        let (_, creds) = parse_s3_options(&opts(&[("skip_signature", "True")])).expect("ok");
-        assert!(matches!(creds, Some(S3Credentials::Anonymous)));
-    }
-
-    #[test]
-    fn parse_s3_options_static_credentials() {
-        let (_, creds) = parse_s3_options(&opts(&[
-            ("access_key_id", "AKIA..."),
-            ("secret_access_key", "shhh"),
-            ("session_token", "tok"),
-        ]))
-        .expect("ok");
-        match creds {
-            Some(S3Credentials::Static(c)) => {
-                assert_eq!(c.access_key_id, "AKIA...");
-                assert_eq!(c.secret_access_key, "shhh");
-                assert_eq!(c.session_token.as_deref(), Some("tok"));
-            }
-            other => panic!("expected Static, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_s3_options_partial_static_creds_rejected() {
-        let err = parse_s3_options(&opts(&[("access_key_id", "AKIA...")])).expect_err("partial");
-        assert!(matches!(err, RustytreeError::InvalidInput(_)), "{err:?}");
-    }
-
-    #[test]
-    fn parse_s3_options_region_and_endpoint_set() {
-        let (config, _) = parse_s3_options(&opts(&[
-            ("region", "us-east-1"),
-            ("endpoint", "https://minio.local:9000"),
-            ("allow_http", "true"),
-        ]))
-        .expect("ok");
-        assert_eq!(config.region.as_deref(), Some("us-east-1"));
-        assert_eq!(
-            config.endpoint_url.as_deref(),
-            Some("https://minio.local:9000")
-        );
-        assert!(config.allow_http);
-    }
-
-    #[test]
-    fn parse_s3_options_unknown_key_rejected() {
-        let err = parse_s3_options(&opts(&[("regin", "us-east-1")])).expect_err("typo");
-        assert!(matches!(err, RustytreeError::InvalidInput(_)), "{err:?}");
-    }
-
-    #[test]
-    fn parse_s3_options_invalid_bool_rejected() {
-        let err = parse_s3_options(&opts(&[("anon", "maybe")])).expect_err("bad bool");
-        assert!(matches!(err, RustytreeError::InvalidInput(_)), "{err:?}");
+    fn store_from_session_bytes_rejects_garbage() {
+        let result = store_from_session_bytes(b"not msgpack");
+        assert!(matches!(result, Err(RustytreeError::Other(_))));
     }
 }

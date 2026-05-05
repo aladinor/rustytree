@@ -1,9 +1,16 @@
 """Walk an icechunk repository (recursive, dict-keyed-by-path).
 
-These tests exercise the icechunk dispatch path end-to-end: rustytree
-detects the repository layout, opens it via `Repository::open` +
-`readonly_session`, wraps the session as a zarrs-compatible store, and
-runs the recursive walk that powers the vanilla Zarr v3 path.
+Two input paths exercised here:
+  - **Local-fs path string**: rustytree's `_rustytree.open_datatree`
+    detects the on-disk icechunk layout and opens it via
+    `Repository::open` + `readonly_session` itself. Convenience for
+    zero-credential local dev; preserved through the Phase 7 redesign.
+  - **`bytes` from `PySession.as_bytes()`**: the cross-extension
+    handoff. Users construct an icechunk `Session` in icechunk-python
+    (with whatever branch / credentials / cache they want) and pass
+    the serialised session bytes; rustytree rehydrates via
+    `icechunk::session::Session::from_bytes`. Primary path for
+    icechunk-on-S3 after Phase 7 dropped the URL dispatch.
 """
 
 from __future__ import annotations
@@ -11,6 +18,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import icechunk
 import pytest
 
 from rustytree._rustytree import open_datatree
@@ -97,28 +105,71 @@ def test_open_ktwx_recursive_walk() -> None:
     assert len(tree) >= 1
 
 
+def test_open_via_session_bytes(tiny_icechunk_repo: Path) -> None:
+    """Cross-extension handoff: open the same local fixture via msgpack
+    session bytes (the path remote/cloud users will take). Confirms
+    `_rustytree.open_datatree(bytes)` reconstructs an equivalent tree
+    to the path-based open."""
+    storage = icechunk.local_filesystem_storage(str(tiny_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+    session_bytes = bytes(session._session.as_bytes())
+
+    tree_via_bytes = open_datatree(session_bytes)
+    tree_via_path = open_datatree(str(tiny_icechunk_repo))
+
+    # Same set of paths and same per-var metadata (handles compare by
+    # identity, so we strip them for the comparison).
+    def metadata_only(tree: dict) -> dict:
+        return {
+            path: {
+                "path": node["path"],
+                "attrs": node["attrs"],
+                "vars": [
+                    {k: v for k, v in var.items() if k not in ("handle", "data")}
+                    for var in node["vars"]
+                ],
+            }
+            for path, node in tree.items()
+        }
+
+    assert metadata_only(tree_via_bytes) == metadata_only(tree_via_path)
+
+
+def test_garbage_session_bytes_rejected() -> None:
+    """Misshapen bytes surface as a clear error rather than panicking
+    across the FFI boundary."""
+    with pytest.raises((ValueError, RuntimeError), match="Session"):
+        open_datatree(b"\x00\x01not msgpack\x02\x03")
+
+
 @pytest.mark.skipif(
     os.environ.get("RUSTYTREE_S3_SMOKE") != "1",
     reason="Network-gated S3 smoke test (set RUSTYTREE_S3_SMOKE=1 to run)",
 )
 def test_open_nexrad_arco_klot_anon_s3() -> None:
-    """Open the public anonymous icechunk repo on AWS.
+    """Open the public anonymous icechunk repo on AWS via session bytes.
 
-    Exercises the `s3://`-icechunk dispatch end-to-end:
-      1. URL parsing produces `StoreSpec::S3 {bucket, prefix}`.
-      2. `s3_is_icechunk` HEADs `KLOT/repo` -> True.
-      3. `open_s3_icechunk` calls icechunk's `new_s3_storage` +
-         `Repository::open` + `readonly_session("main")` against AWS.
-      4. The recursive walk reads each group's `zarr.json` from the
-         icechunk manifest and returns a dict keyed by absolute path.
+    User flow:
+      1. Construct icechunk `Session` (with credentials, branch, etc.).
+      2. Serialise via `session._session.as_bytes()`.
+      3. Pass bytes to `_rustytree.open_datatree`; rustytree
+         rehydrates via `Session::from_bytes` and walks.
 
     Network-gated because it hits real AWS; opt-in via
     `RUSTYTREE_S3_SMOKE=1`.
     """
-    tree = open_datatree(
-        "s3://nexrad-arco/KLOT",
-        storage_options={"region": "us-east-1", "anon": True},
+    storage = icechunk.s3_storage(
+        bucket="nexrad-arco",
+        prefix="KLOT",
+        region="us-east-1",
+        anonymous=True,
     )
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+    session_bytes = bytes(session._session.as_bytes())
+
+    tree = open_datatree(session_bytes)
     assert "/" in tree
     root = tree["/"]
     assert root["path"] == "/"
