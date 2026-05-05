@@ -27,6 +27,7 @@ use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTr
 
 use crate::dtype_dispatch::for_each_supported_dtype;
 use crate::error::{Result, RustytreeError};
+use crate::glob::GlobPredicate;
 use crate::node::{EagerElements, NodeData, VarMeta};
 use crate::store::WalkSource;
 
@@ -90,11 +91,19 @@ pub(crate) async fn open_single(
 /// `recursive` (default `true`) controls whether we walk past
 /// `root_path`. With `recursive=false` we return exactly one
 /// [`NodeData`] — the requested group plus its arrays.
+///
+/// `glob` (optional) is a conservative prefix predicate compiled
+/// from the user's glob pattern. When provided, both walkers prune
+/// subtrees that cannot match — saving `Group::async_open` calls on
+/// vanilla and `Array::new_with_metadata` work on icechunk. The
+/// Python `_filter_by_glob` post-filter is the source of truth for
+/// matching, so this predicate is purely an optimisation.
 pub(crate) async fn walk_recursive(
     source: WalkSource,
     root_path: &str,
     max_concurrency: Option<usize>,
     recursive: bool,
+    glob: Option<&GlobPredicate>,
 ) -> Result<Vec<NodeData>> {
     let semaphore = Arc::new(Semaphore::new(max_concurrency.unwrap_or(32).max(1)));
     let mut nodes = match source {
@@ -103,11 +112,17 @@ pub(crate) async fn walk_recursive(
             // from icechunk's already-fetched in-memory snapshot tree
             // instead of issuing per-node `Group::async_open` /
             // `Array::async_open` round-trips through the session.
-            walk_icechunk_session_snapshot(&bundle.session, &bundle.store, root_path, recursive)
-                .await?
+            walk_icechunk_session_snapshot(
+                &bundle.session,
+                &bundle.store,
+                root_path,
+                recursive,
+                glob,
+            )
+            .await?
         }
         WalkSource::Vanilla(store) => {
-            walk_via_zarrs(&store, root_path, &semaphore, recursive).await?
+            walk_via_zarrs(&store, root_path, &semaphore, recursive, glob).await?
         }
     };
 
@@ -132,10 +147,11 @@ async fn walk_via_zarrs(
     root_path: &str,
     semaphore: &Arc<Semaphore>,
     recursive: bool,
+    glob: Option<&GlobPredicate>,
 ) -> Result<Vec<NodeData>> {
     let paths: Vec<String> = if recursive {
         let mut paths = Vec::new();
-        discover_paths(store, root_path.to_string(), semaphore, &mut paths).await?;
+        discover_paths(store, root_path.to_string(), semaphore, glob, &mut paths).await?;
         paths
     } else {
         vec![root_path.to_string()]
@@ -167,6 +183,7 @@ async fn walk_icechunk_session_snapshot(
     store: &AsyncReadableListableStorage,
     root_path: &str,
     recursive: bool,
+    glob: Option<&GlobPredicate>,
 ) -> Result<Vec<NodeData>> {
     let parent = IcePath::new(root_path).map_err(|err| {
         RustytreeError::InvalidInput(format!("icechunk: invalid root path {root_path:?}: {err}"))
@@ -191,12 +208,18 @@ async fn walk_icechunk_session_snapshot(
     // parent group. The second pass needs the first's keys, so we
     // can't fuse them.
     //
-    // When `recursive` is false we keep only the root group itself
-    // and arrays whose immediate parent is `root_path`. icechunk's
+    // Two filters apply during materialisation. icechunk's
     // `list_nodes` always returns the full subtree (it's already in
-    // memory), so we filter at materialisation time — the win is
-    // skipping the CPU-bound `Array::new_with_metadata` for arrays
+    // memory), so we filter at construction time — the win is
+    // skipping the CPU-bound `Array::new_with_metadata` for nodes
     // we'd otherwise drop.
+    //   - `recursive=false`: keep only the root group itself + arrays
+    //     whose immediate parent is `root_path`.
+    //   - `glob=Some(_)`: keep only groups whose path could be an
+    //     ancestor of (or equal to) a glob match, and arrays whose
+    //     parent group survives the same predicate. Conservative
+    //     bias: false positives are safe because Python's
+    //     `_filter_by_glob` post-filter is authoritative.
     let root_normalized = normalize_path(root_path);
     let mut groups: BTreeMap<String, NodeData> = BTreeMap::new();
     let mut arrays: Vec<icechunk::format::snapshot::NodeSnapshot> = Vec::new();
@@ -205,6 +228,11 @@ async fn walk_icechunk_session_snapshot(
             IceNodeData::Group => {
                 let path = ice_path_to_string(&snap.path);
                 if !recursive && path != root_normalized {
+                    continue;
+                }
+                if let Some(g) = glob
+                    && !g.could_descendant_match(&path)
+                {
                     continue;
                 }
                 let attrs = parse_group_attrs(&snap.user_data, &path)?;
@@ -218,11 +246,15 @@ async fn walk_icechunk_session_snapshot(
                 );
             }
             IceNodeData::Array { .. } => {
-                if !recursive {
-                    let array_path = ice_path_to_string(&snap.path);
-                    if parent_of(&array_path) != root_normalized {
-                        continue;
-                    }
+                let array_path = ice_path_to_string(&snap.path);
+                let parent = parent_of(&array_path);
+                if !recursive && parent != root_normalized {
+                    continue;
+                }
+                if let Some(g) = glob
+                    && !g.could_descendant_match(&parent)
+                {
+                    continue;
                 }
                 arrays.push(snap);
             }
@@ -411,6 +443,7 @@ fn discover_paths<'a>(
     store: &'a AsyncReadableListableStorage,
     path: String,
     semaphore: &'a Arc<Semaphore>,
+    glob: Option<&'a GlobPredicate>,
     out: &'a mut Vec<String>,
 ) -> futures::future::BoxFuture<'a, Result<()>> {
     Box::pin(async move {
@@ -434,13 +467,22 @@ fn discover_paths<'a>(
 
         out.push(path);
 
-        let child_strs: Vec<String> = child_paths.into_iter().map(|p| p.to_string()).collect();
+        // Prune child subtrees the glob predicate proves can't match
+        // anything. Conservative: when `glob` is `None` or the
+        // predicate can't reason about the pattern, every child is
+        // walked (false positives are safe — Python's
+        // `_filter_by_glob` post-filter is authoritative).
+        let child_strs: Vec<String> = child_paths
+            .into_iter()
+            .map(|p| p.to_string())
+            .filter(|p| glob.is_none_or(|g| g.could_descendant_match(p)))
+            .collect();
         let mut sub_results: Vec<Vec<String>> = try_join_all(child_strs.into_iter().map(|c| {
             let store = store.clone();
             let sem = Arc::clone(semaphore);
             async move {
                 let mut sub = Vec::new();
-                discover_paths(&store, c, &sem, &mut sub).await?;
+                discover_paths(&store, c, &sem, glob, &mut sub).await?;
                 Ok::<_, RustytreeError>(sub)
             }
         }))

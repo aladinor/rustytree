@@ -359,6 +359,200 @@ def test_glob_group_icechunk(multilevel_icechunk_repo: Path) -> None:
     assert paths == ["/", "/volume_a", "/volume_a/sweep_0"], paths
 
 
+def test_glob_prune_drops_nonmatching_subtree_vanilla(
+    multilevel_zarr_store: Path,
+) -> None:
+    """Phase 8/2: the `glob=` kwarg passes a conservative prefix
+    predicate into the Rust walk to skip subtrees that can't match.
+    The dict returned by Rust (BEFORE Python's `_filter_by_glob`)
+    should already be smaller than the unfiltered walk — proves the
+    prune fired rather than the Python post-filter doing all the
+    work.
+    """
+    from rustytree._rustytree import open_datatree as _rust_open
+
+    full = _rust_open(str(multilevel_zarr_store))
+    pruned = _rust_open(str(multilevel_zarr_store), glob="/*/sweep_0")
+    assert "/volume_a/sweep_1" in full
+    assert "/volume_a/sweep_1" not in pruned
+    assert "/volume_a/sweep_0" in pruned
+
+
+def test_glob_prune_drops_nonmatching_subtree_icechunk(
+    multilevel_icechunk_repo: Path,
+) -> None:
+    """Same prune-fired check for the icechunk snapshot walker."""
+    from rustytree._rustytree import open_datatree as _rust_open
+
+    full = _rust_open(str(multilevel_icechunk_repo))
+    pruned = _rust_open(str(multilevel_icechunk_repo), glob="/*/sweep_0")
+    assert "/volume_a/sweep_1" in full
+    assert "/volume_a/sweep_1" not in pruned
+    assert "/volume_a/sweep_0" in pruned
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "/*/sweep_0",
+        "/*/sweep_*",
+        "/volume_*/sweep_0",
+        "/*/*",
+        # Pathological pattern with `//` — covers the parse-side bug
+        # where empty pattern segments would otherwise produce a Rust
+        # false negative. `PurePosixPath` coalesces `//`, so we must
+        # too.
+        "/volume_a//sweep_0",
+    ],
+)
+def test_glob_prune_preserves_python_filter_truth(
+    multilevel_zarr_store: Path, pattern: str
+) -> None:
+    """Parity sweep: for any pattern, the Rust prune (`glob=`) must
+    not drop a path that Python's `_filter_by_glob` would have
+    accepted. Concretely: `_filter_by_glob(rust_full_walk, pattern)`
+    must equal `_filter_by_glob(rust_pruned_walk, pattern)`. False
+    negatives in the Rust prune (silent data loss) would surface as
+    a diff between these two sets.
+    """
+    from rustytree._rustytree import open_datatree as _rust_open
+    from rustytree.backend import _filter_by_glob
+
+    full = _rust_open(str(multilevel_zarr_store))
+    pruned = _rust_open(str(multilevel_zarr_store), glob=pattern)
+
+    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(
+        pruned, pattern
+    ).keys()
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "/*/sweep_0",
+        "/*/sweep_*",
+        "/volume_*/sweep_0",
+        "/*/*",
+        "/volume_a//sweep_0",
+    ],
+)
+def test_glob_prune_preserves_python_filter_truth_icechunk(
+    multilevel_icechunk_repo: Path, pattern: str
+) -> None:
+    """Same parity sweep as the vanilla version, against the icechunk
+    snapshot walker. The icechunk path applies the predicate at a
+    different call site (snapshot filter rather than `discover_paths`
+    recursion), so it could regress independently.
+    """
+    from rustytree._rustytree import open_datatree as _rust_open
+    from rustytree.backend import _filter_by_glob
+
+    full = _rust_open(str(multilevel_icechunk_repo))
+    pruned = _rust_open(str(multilevel_icechunk_repo), glob=pattern)
+
+    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(
+        pruned, pattern
+    ).keys()
+
+
+def test_open_datatree_empty_group_treated_as_root(
+    multilevel_zarr_store: Path,
+) -> None:
+    """``group=""`` is a corner-case that occasionally shows up in
+    user code; xarray's convention is to treat it as root. Without
+    normalisation it reaches Rust as the empty string and surfaces
+    as a path-validation error. Pin the "treat as root" behaviour."""
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group="")
+    expected = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree")
+    assert {n.path for n in dt.subtree} == {n.path for n in expected.subtree}
+
+
+def test_open_datatree_literal_group_collapses_double_slash(
+    multilevel_zarr_store: Path,
+) -> None:
+    """A literal `group="/volume_a//sweep_0"` should resolve the same
+    as `/volume_a/sweep_0`. The `//` collapse fix in Rust's
+    `GlobPredicate::parse` covered globs only; without the matching
+    Python-side `PurePosixPath` canonicalisation, the user-supplied
+    path stays as `/volume_a//sweep_0` while Rust marshals nodes
+    with the canonical form, missing the lookup → `KeyError`. End-
+    to-end smoke caught this; this regression test pins the fix.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a//sweep_0",
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    # `_reroot` strips `/volume_a/sweep_0` so the leaf lands at "/".
+    assert paths == ["/"], paths
+
+
+def test_open_datatree_literal_group_strips_trailing_slash(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`group="/volume_a/"` (trailing slash) should resolve the same
+    as `/volume_a`. PurePosixPath strips trailing slashes."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="/volume_a/"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == ["/", "/sweep_0", "/sweep_1"], paths
+
+
+def test_glob_group_character_class(multilevel_zarr_store: Path) -> None:
+    """`PurePosixPath.match` supports `[...]` character classes; the
+    fixture has `sweep_0` and `sweep_1` so `[01]` should match both.
+    Our Rust prune bails to "no prune" for patterns containing `[`
+    (the Python filter remains authoritative), so this test exercises
+    the fallback path."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_[01]"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == [
+        "/",
+        "/volume_a",
+        "/volume_a/sweep_0",
+        "/volume_a/sweep_1",
+    ], paths
+
+
+def test_glob_group_question_mark(multilevel_zarr_store: Path) -> None:
+    """`PurePosixPath.match` supports `?` as single-char wildcard.
+    Same Rust-prune bail-out as `[...]` — exercises the fallback."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_?"
+    )
+    paths = sorted(n.path for n in dt.subtree)
+    assert paths == [
+        "/",
+        "/volume_a",
+        "/volume_a/sweep_0",
+        "/volume_a/sweep_1",
+    ], paths
+
+
+def test_open_datatree_missing_literal_group_raises_icechunk(
+    multilevel_icechunk_repo: Path,
+) -> None:
+    """A literal `group=` that doesn't exist should raise rather than
+    silently return an empty tree. Targets the icechunk fast-path
+    specifically: icechunk's `Session::list_nodes(parent)` returns an
+    empty iterator for non-existent paths (vs vanilla's
+    `Group::async_open` which already raises). Without the post-walk
+    presence check, a typo like ``group="VCP/sweep_0"`` (intended
+    ``"VCP-12/sweep_0"``) would silently succeed with empty data.
+    Globs are exempt — empty match is valid for them.
+    """
+    with pytest.raises(KeyError, match="not found"):
+        xr.open_datatree(
+            str(multilevel_icechunk_repo),
+            engine="rustytree",
+            group="/nonexistent/path",
+        )
+
+
 def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
     """A relative pattern (no leading `/`) matches any path suffix.
     `*/sweep_0` should match `/volume_a/sweep_0` (the leading-slash

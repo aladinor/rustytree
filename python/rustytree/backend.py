@@ -116,6 +116,7 @@ def _build_rust_kwargs(
     storage_options: dict[str, Any] | None,
     max_concurrency: int | None,
     recursive: bool | None = None,
+    glob: str | None = None,
 ) -> dict[str, Any]:
     """Forward only the kwargs the user actually set, so the Rust side
     sees its own defaults (e.g. `max_concurrency=32`, `recursive=true`)
@@ -131,6 +132,8 @@ def _build_rust_kwargs(
         kwargs["max_concurrency"] = max_concurrency
     if recursive is not None:
         kwargs["recursive"] = recursive
+    if glob is not None:
+        kwargs["glob"] = glob
     return kwargs
 
 
@@ -143,14 +146,28 @@ _GLOB_CHARS = re.compile(r"[*?\[]")
 
 
 def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
-    """Prepend ``/`` to literal group paths so icechunk's path validator
-    accepts them. Globs are left alone: ``PurePosixPath.match`` treats
-    relative patterns as suffix matches, absolute ones as full-path
-    matches — meaningfully different.
+    """Normalise a literal group path to absolute, canonical form.
+    Globs are left alone: ``PurePosixPath.match`` treats relative
+    patterns as suffix matches, absolute ones as full-path matches —
+    meaningfully different.
+
+    Rules:
+      - ``None`` → ``None`` (no group selection).
+      - Empty string → ``"/"`` (treat as root, matching xarray's
+        ``open_*`` convention).
+      - Otherwise: prepend ``/`` if absent, then canonicalise via
+        ``PurePosixPath`` to collapse ``//`` runs and strip trailing
+        slashes. icechunk's path validator and our Rust walk both
+        emit canonical paths; without normalisation, a user-supplied
+        ``/foo//bar`` or ``/foo/`` would miss the lookup.
     """
-    if group and not is_glob and not group.startswith("/"):
-        return "/" + group
-    return group
+    if is_glob or group is None:
+        return group
+    if group == "":
+        return ROOT
+    if not group.startswith("/"):
+        group = "/" + group
+    return str(PurePosixPath(group))
 
 
 def _to_rust_source(filename_or_obj: Any) -> Any:
@@ -348,11 +365,12 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         else:
             storage_options_arg = storage_options
 
-        # Glob `group=` (xarray PR #11302 semantics): walk the full tree
-        # on the Rust side, then filter the result dict via
-        # `PurePosixPath.match` + ancestor inclusion. The literal-path
-        # case stays on the fast path (Rust walks only the requested
-        # subtree).
+        # Glob `group=` (xarray PR #11302 semantics): the Rust walk
+        # accepts the pattern as a conservative prefix predicate to
+        # prune subtrees that can't match (Phase 8 / part 2). Python's
+        # `_filter_by_glob` is the source of truth — it runs after
+        # the walk and drops any over-walked nodes the Rust prune
+        # was conservative about.
         is_glob = group is not None and bool(_GLOB_CHARS.search(group))
         group = _normalize_literal_group(group, is_glob)
 
@@ -363,11 +381,20 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
                 branch=branch,
                 storage_options=storage_options_arg,
                 max_concurrency=max_concurrency,
+                glob=group if is_glob else None,
             ),
         )
 
         if is_glob:
             tree = _filter_by_glob(tree, group)
+        elif group and group != ROOT and group not in tree:
+            # Missing-literal-path: silent-empty is misleading (matches
+            # the user-visible behaviour of `open_dataset`, which already
+            # raises). Globs are exempt — empty match is valid for them
+            # per xarray PR #11302's semantics.
+            raise KeyError(
+                f"rustytree.open_datatree: group {group!r} not found in store"
+            )
 
         groups: dict[str, Dataset] = {
             path: _node_to_dataset(
