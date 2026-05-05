@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Rust-backed xarray DataTree backend for fast Zarr access from object storage"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "AGPL-3.0-or-later" }
+license = { text = "Apache-2.0" }
 authors = [
     { name = "Alfonso Ladino", email = "alfonso@atmoscale.ai" },
 ]
@@ -16,7 +16,7 @@ keywords = ["xarray", "zarr", "datatree", "rust", "object-storage"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

@@ -50,7 +50,7 @@ icechunk reframes the bottleneck profile:
 
 `engine="rustytree"` resolves both icechunk and vanilla Zarr v3 stores
 polymorphically at the store boundary, the same way `engine="zarr"` does
-today. After Phase 7 (PR #16), the input contract is **symmetric with
+today. The input contract is **symmetric with
 xarray's stock `engine="zarr"`**: users construct an icechunk
 `Session` themselves and pass `session.store`. URL dispatch for
 *remote* icechunk has been removed — users have full control over
@@ -67,7 +67,7 @@ Detection cues:
 - **Python object**: `isinstance(obj, icechunk.{Session,IcechunkStore})` → bytes-roundtrip path.
 - **Local string**: `<root>/repo` file + `<root>/snapshots/` directory → icechunk; otherwise vanilla Zarr v3.
 - **`s3://` string**: vanilla Zarr v3 only. Remote icechunk requires an explicit `Session`.
-- **GCS / Azure / HTTP**: not yet supported (Phase 6/3).
+- **GCS / Azure / HTTP**: not yet supported.
 
 The cross-extension Session unwrap goes through `PySession.as_bytes()`
 (msgpack-serde) and `icechunk::session::Session::from_bytes()`. Both
@@ -202,7 +202,7 @@ Headline measurements against `s3://nexrad-arco/KLOT` (anonymous,
 107-node radar DataTree) via the public-API entrypoint
 `xr.open_datatree(session.store, engine="rustytree", ...)`. Cold-
 cache from a US-East home connection unless noted. The benchmark
-suite (`benchmarks/`) lands in Phase 9.
+suite (`benchmarks/`) is a planned follow-up.
 
 | Workload | `engine="rustytree"` | `engine="zarr"` | Speedup |
 | --- | --- | --- | --- |

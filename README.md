@@ -43,9 +43,9 @@ dt = xr.open_datatree(session.store, engine="rustytree")
 ds = xr.open_dataset(session.store, engine="rustytree",
                      group="/VCP-12/sweep_0")
 
-# Or apply a glob pattern — the radar workflow that motivated Phase 8:
-# "give me sweep_0 from every VCP" returns a tree filtered to those
-# matches, with the VCP container groups auto-included as ancestors.
+# Or apply a glob pattern. "Give me sweep_0 from every VCP" is the
+# canonical radar workflow — returns a tree filtered to those matches,
+# with the VCP container groups auto-included as ancestors.
 sweeps_0 = xr.open_datatree(session.store, engine="rustytree",
                             group="/*/sweep_0")
 ```
@@ -86,8 +86,8 @@ from a home connection; ~50 s for `engine="zarr"` on the same).
 
 - [`docs/architecture.md`](docs/architecture.md) — what the project is and why
   the Rust backend wins.
-- [`docs/usage.md`](docs/usage.md) — how to build it, run the test suite, and
-  the planned API surface.
+- [`docs/usage.md`](docs/usage.md) — how to install, run the test suite, and
+  the API surface (inputs, `group=` patterns, lazy reads, errors).
 - [`docs/contributing.md`](docs/contributing.md) — branching, commit
   conventions, validation gates, per-PR audit.
 - [`docs/release-process.md`](docs/release-process.md) — versioning, tag,
@@ -95,13 +95,7 @@ from a home connection; ~50 s for `engine="zarr"` on the same).
 
 ## License
 
-[GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
-
-If you use, modify, or run this software — including over a network as part
-of a hosted service — you must make the corresponding source code available
-under the same license to anyone interacting with it. See section 13 of the
-LICENSE for the network-use clause. If you need different terms (e.g. for
-proprietary embedding), open an issue to discuss.
+[Apache License 2.0](LICENSE) (Apache-2.0).
 
 ## Acknowledgements
 

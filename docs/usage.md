@@ -99,7 +99,7 @@ Variables come back as `LazilyIndexedArray(RustyBackendArray)` —
 chunks are not fetched until xarray asks for them (e.g.
 `ds.foo.values`, `ds.compute()`, indexing, dask scheduling). The
 exception: 1-D self-named dim coords are **eagerly** fetched during
-the walk (Phase C) so xarray's `_maybe_create_default_indexes`
+the walk (the eager-fetch step) so xarray's `_maybe_create_default_indexes`
 doesn't fan out N serial chunk reads on open.
 
 ## Errors
@@ -136,8 +136,8 @@ The win profile depends on backend and workload:
   `block_on`, so concurrent loads from a thread pool actually
   overlap.
 
-The full performance table and methodology will land with Phase 9
-(benchmarks).
+A formal benchmark suite (with reproducible methodology, p95 timings,
+and side-by-side `engine="zarr"` baselines) is planned as a follow-up.
 
 ## Run the test suite
 
