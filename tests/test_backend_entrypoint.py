@@ -126,6 +126,40 @@ def test_unsupported_scheme_propagates_clearly() -> None:
         xr.open_datatree("gs://bucket/store.zarr", engine="rustytree")
 
 
+# ---- _RustyDataStore shim ----
+
+
+def test_rusty_data_store_satisfies_abstract_data_store(tiny_zarr_store: Path) -> None:
+    """Construct `_RustyDataStore` directly from a Rust-walked node and
+    confirm it honours the `AbstractDataStore` contract that
+    `StoreBackendEntrypoint.open_dataset` relies on. Catches regressions
+    in the shim independently of the CF-decode parity tests.
+    """
+    from xarray.backends.common import AbstractDataStore
+
+    from rustytree._rustytree import open_datatree as _rust_open
+    from rustytree.backend import _RustyDataStore
+
+    tree = _rust_open(str(tiny_zarr_store))
+    store = _RustyDataStore(tree["/"])
+
+    assert isinstance(store, AbstractDataStore)
+
+    # `load()` returns (variables, attrs) — the contract
+    # `StoreBackendEntrypoint.open_dataset` calls into.
+    variables, attrs = store.load()
+    assert set(variables) == {"temp", "mask"}
+    for var in variables.values():
+        # Per-var encoding from the shim's `get_variables` flows through.
+        assert "chunks" in var.encoding
+        assert "preferred_chunks" in var.encoding
+    assert isinstance(attrs, type(attrs))  # FrozenDict-shaped
+
+    # Defaults inherited from `AbstractDataStore`: empty encoding, no-op close.
+    assert store.get_encoding() == {}
+    assert store.close() is None
+
+
 # ---- KTWX smoke (network-free) ----
 
 KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")

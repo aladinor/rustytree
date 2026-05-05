@@ -28,14 +28,14 @@ from collections.abc import Iterable, Iterator
 from typing import Any
 
 import numpy as np
-from xarray import conventions
 from xarray.backends.common import (
+    AbstractDataStore,
     BackendEntrypoint,
     datatree_from_dict_with_io_cleanup,
 )
+from xarray.backends.store import StoreBackendEntrypoint
 from xarray.coding import times as _xtimes
 from xarray.core import indexing
-from xarray.core.coordinates import Coordinates
 from xarray.core.dataset import Dataset
 from xarray.core.datatree import DataTree
 from xarray.core.variable import Variable
@@ -190,6 +190,40 @@ def _reroot(groups: dict[str, Dataset], root: str) -> dict[str, Dataset]:
     return out
 
 
+class _RustyDataStore(AbstractDataStore):
+    """Adapt a Rust ``NodeData`` dict to xarray's ``AbstractDataStore`` so
+    ``StoreBackendEntrypoint.open_dataset`` can build the per-group Dataset."""
+
+    __slots__ = ("_node",)
+
+    def __init__(self, node: dict) -> None:
+        self._node = node
+
+    def get_variables(self) -> dict[str, Variable]:
+        out: dict[str, Variable] = {}
+        for var in self._node["vars"]:
+            dims = tuple(var["dims"])
+            # Phase C may have pre-fetched the variable's full contents
+            # (1-D self-named dim coords + CF time-likes); other vars
+            # stay lazy through `RustyBackendArray`.
+            data: Any = (
+                var["data"]
+                if "data" in var
+                else indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
+            )
+            chunks = tuple(var["handle"].chunks)
+            out[var["name"]] = Variable(
+                dims=dims,
+                data=data,
+                attrs=dict(var["attrs"]),
+                encoding={"chunks": chunks, "preferred_chunks": dict(zip(dims, chunks))},
+            )
+        return out
+
+    def get_attrs(self) -> dict[str, Any]:
+        return dict(self._node["attrs"])
+
+
 def _node_to_dataset(
     node: dict,
     *,
@@ -201,47 +235,13 @@ def _node_to_dataset(
     use_cftime: bool | None,
     decode_timedelta: bool | None,
 ) -> Dataset:
-    """Convert a single ``NodeData`` dict into an ``xr.Dataset``.
-
-    Mirrors `StoreBackendEntrypoint.open_dataset`'s shape: lazy
-    `RustyBackendArray`s wrapped in `LazilyIndexedArray`, then CF
-    decoding, then split into data_vars and coord_vars. The result has
-    no `_close` callback — chunk reads flow through the Rust runtime,
-    which lives for the lifetime of the process.
-    """
-    raw_vars: dict[str, Variable] = {}
-    for var in node["vars"]:
-        name = var["name"]
-        dims = tuple(var["dims"])
-        # Rust-side Phase C eagerly fetches "decoder-trigger" vars (1-D
-        # self-named dim coords + CF time-likes) in parallel; when it
-        # does, the marshaller emits a `"data"` numpy array on the var
-        # dict and we use that directly. Other vars stay lazy.
-        if "data" in var:
-            data: Any = var["data"]
-        else:
-            data = indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
-        # Surface the on-disk chunk shape on `encoding` so xarray can
-        # honour `chunks={}` (preferred chunks) and round-trip
-        # `to_zarr`. Without these xarray's chunking pass collapses to
-        # a single chunk per dim and `chunks={}` produces dask arrays
-        # with the wrong shape.
-        chunks_tuple = tuple(var["handle"].chunks)
-        encoding = {
-            "chunks": chunks_tuple,
-            "preferred_chunks": dict(zip(dims, chunks_tuple)),
-        }
-        raw_vars[name] = Variable(
-            dims=dims,
-            data=data,
-            attrs=dict(var["attrs"]),
-            encoding=encoding,
-        )
-
+    """Convert a single ``NodeData`` dict into an ``xr.Dataset`` by
+    delegating to xarray's ``StoreBackendEntrypoint`` over a
+    ``_RustyDataStore`` shim — inherits CF decode, data/coord promotion,
+    and ``encoding``/``set_close`` wiring instead of reimplementing them."""
     with _metadata_only_datetime_dtype():
-        decoded_vars, decoded_attrs, coord_names = conventions.decode_cf_variables(
-            raw_vars,
-            dict(node["attrs"]),
+        return StoreBackendEntrypoint().open_dataset(
+            _RustyDataStore(node),
             mask_and_scale=mask_and_scale,
             decode_times=decode_times,
             concat_characters=concat_characters,
@@ -250,18 +250,6 @@ def _node_to_dataset(
             use_cftime=use_cftime,
             decode_timedelta=decode_timedelta,
         )
-
-    data_vars: dict[str, Variable] = {}
-    coord_vars: dict[str, Variable] = {}
-    for name, variable in decoded_vars.items():
-        # CF-flagged OR self-named 1D dimension coordinate.
-        if name in coord_names or variable.dims == (name,):
-            coord_vars[name] = variable
-        else:
-            data_vars[name] = variable
-
-    coords = Coordinates(coord_vars, indexes={})
-    return Dataset(data_vars, coords=coords, attrs=decoded_attrs)
 
 
 class RustytreeBackendEntrypoint(BackendEntrypoint):
