@@ -153,13 +153,20 @@ not yet implemented):
 | KLOT-xradar (local icechunk, 12 groups, warm-cache) | `xr.open_datatree(..., engine="zarr", consolidated=False)` | 213.3 ms | — |
 | KLOT-xradar (local icechunk, 12 groups, warm-cache) | `_rustytree.open_datatree(...)` (recursive walk) | 81.5 ms | **2.62×** |
 | `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `xr.open_datatree(session.store, engine="zarr", consolidated=False)` | 50,370 ms | — |
-| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache) | `_rustytree.open_datatree(...)` (recursive walk) | 1,557 ms | **32.4×** |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, debug build) | `_rustytree.open_datatree(...)` (recursive walk) | 1,557 ms | **32.4×** |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release build) | `_rustytree.open_datatree(...)` (recursive walk) | 843 ms | **60×** |
+| `s3://nexrad-arco/KLOT` (anon S3 icechunk, 107 groups, cold-cache, release + parallel probe) | `_rustytree.open_datatree(...)` ([#13]) | **563 ms** | **89×** |
 
-The S3 win is dominated by cross-group parallelism: xarray opens 107
-groups sequentially through `IcechunkStore`'s `SyncMixin`, paying ~470 ms
-per group for the metadata round-trip. The recursive walk fans them out
-through one tokio runtime with `try_join_all` and a 32-permit semaphore,
-holding ~32 in-flight metadata GETs at a time.
+The S3 win has two stacked drivers:
+
+- **Cross-group parallelism**: xarray opens 107 groups sequentially
+  through `IcechunkStore`'s `SyncMixin`, paying ~470 ms per group for
+  the metadata round-trip. The recursive walk fans them out through one
+  tokio runtime with `try_join_all` and a 32-permit semaphore, holding
+  ~32 in-flight metadata GETs at a time.
+- **Probe pipelining ([#13])**: the icechunk-vs-vanilla auto-detect
+  HEAD on `<prefix>/repo` (~260 ms cold-cache TLS+DNS+TCP) now races
+  alongside `Repository::open` instead of running before it.
 
 Per-array eager opens (today's `open_single` opens every array to
 populate `VarMeta`) are the ceiling on further wins — the lazy
