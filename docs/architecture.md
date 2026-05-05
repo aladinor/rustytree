@@ -174,8 +174,34 @@ populate `VarMeta`) are the ceiling on further wins — the lazy
 
 ## Lazy chunk reads
 
-`RustyBackendArray(BackendArray)` (Python) holds a `ZarrsArrayHandle` (PyO3
-class). Its `_raw_indexing_method` releases the GIL, calls `handle.read_subset(...)`
-which runs `runtime.block_on(array.async_retrieve_array_subset(...))` and
-returns a NumPy ndarray. xarray wraps it in `LazilyIndexedArray` automatically —
-same lazy semantics as `engine="zarr"`.
+Implemented in [#14]. Every var dict produced by `_rustytree.open_datatree(...)`
+carries a `handle` field — a `ZarrsArrayHandle` PyO3 class wrapping the
+opened `zarrs::Array`. The walk was already paying for the
+`Array::async_open` calls (to populate `VarMeta`); the handle just
+keeps the resulting `Arc<Array>` alive instead of dropping it.
+
+`ZarrsArrayHandle` exposes:
+
+- `shape`, `dtype` (canonical NumPy string)
+- `read_subset(ranges)` where `ranges = list[tuple[int, int]]` (one
+  `(start, stop)` per dim, exclusive stop). Runs
+  `runtime.block_on(array.async_retrieve_array_subset_elements::<T>(...))`
+  with the GIL released via `Python::detach`. Returns a 1-D NumPy
+  array of the matching primitive type.
+
+Python-side, `RustyBackendArray(BackendArray)` adapts xarray's indexing
+protocol to the handle:
+
+- Advertises `IndexingSupport.BASIC` (slice + scalar-int per axis).
+  Fancy indexing flows through xarray's
+  `explicit_indexing_adapter` which decomposes it into a sequence of
+  basic reads.
+- `_raw_indexing_method` translates xarray's tuple-of-(slice|int) into
+  `(start, stop)` ranges, calls `handle.read_subset(ranges)`, reshapes,
+  and squeezes axes selected by integer indexers.
+
+Phase 5 (BackendEntrypoint wiring) is what makes `xr.open_datatree(URL,
+engine="rustytree")` actually return a real `DataTree` — it wraps each
+var's handle as a `RustyBackendArray`, then in
+`LazilyIndexedArray(...)`, then folds it into a per-group `xr.Dataset`
+that runs through `xr.conventions.decode_cf_variables`.

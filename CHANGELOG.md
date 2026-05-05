@@ -11,6 +11,32 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Lazy `ZarrsArrayHandle` + `RustyBackendArray` for chunk reads ([#14]):
+  every var dict produced by `_rustytree.open_datatree(...)` now carries
+  a `"handle"` key holding a `ZarrsArrayHandle` PyO3 class. The handle
+  wraps the already-opened `zarrs::Array` (no extra opens — the walk
+  was already opening every array to populate `VarMeta`) and exposes
+  `shape`, `dtype` (NumPy-canonical string), and
+  `read_subset(ranges) -> numpy.ndarray` that runs
+  `runtime.block_on(array.async_retrieve_array_subset_elements::<T>(...))`
+  with the GIL released via `Python::detach`. Dispatch covers `bool`,
+  `int{8,16,32,64}`, `uint{8,16,32,64}`, and `float{32,64}`; less
+  common dtypes raise `NotImplementedError` naming what's missing.
+  New `python/rustytree/_array.py` defines `RustyBackendArray(BackendArray)`
+  using `xarray.core.indexing.explicit_indexing_adapter` at
+  `IndexingSupport.BASIC`, translating xarray-shaped indexers into
+  `(start, stop)` ranges per axis (with axis-squeeze for integer
+  indexers, including negative ones). Cargo: `numpy = "0.28"` to back
+  the `PyArray1::from_vec` zero-copy handoff. New `tests/test_lazy.py`
+  (11 tests) covers handle presence, shape/dtype round-trip, full-array
+  reads matching `xr.open_zarr`, basic slicing, integer indexing,
+  negative indexing, and the unsupported-dtype error path. This PR
+  unblocks Phase 5 — `xr.open_datatree(URL, engine="rustytree")` can
+  now be wired by wrapping each var's handle as a `RustyBackendArray`
+  and handing the dict to `datatree_from_dict_with_io_cleanup`.
+
 ### Changed
 
 - Pipeline the S3 icechunk-vs-vanilla probe with `Repository::open`
@@ -161,3 +187,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#11]: https://github.com/aladinor/rustytree/pull/11
 [#12]: https://github.com/aladinor/rustytree/pull/12
 [#13]: https://github.com/aladinor/rustytree/pull/13
+[#14]: https://github.com/aladinor/rustytree/pull/14
