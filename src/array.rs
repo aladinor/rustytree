@@ -55,6 +55,24 @@ impl ZarrsArrayHandle {
         PyTuple::new(py, self.array.shape())
     }
 
+    /// The array's chunk shape as a tuple of `int` (one per dimension).
+    /// Used by the Python entrypoint to populate
+    /// `Variable.encoding["chunks"]` and `["preferred_chunks"]`, which
+    /// xarray reads when the user passes `chunks={}` to
+    /// `xr.open_datatree` so dask gets the on-disk chunk shape rather
+    /// than a single big chunk per array.
+    #[getter]
+    fn chunks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let chunk_shape = self
+            .array
+            .chunk_shape(&vec![0; self.array.dimensionality()])
+            .map_err(|err| {
+                PyValueError::new_err(format!("zarrs: chunk_shape lookup failed: {err}"))
+            })?;
+        let dims: Vec<u64> = chunk_shape.iter().map(|n| n.get()).collect();
+        PyTuple::new(py, dims)
+    }
+
     /// The array's dtype as a `NumPy` dtype string (e.g. `"float64"`,
     /// `"int8"`). Falls back to `format!("{:?}")` for less common
     /// dtypes, which `numpy.dtype(...)` will raise on — those need

@@ -11,6 +11,58 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking**: drop the `s3://` URL icechunk dispatch ([#16]).
+  `xr.open_datatree("s3://bucket/prefix", engine="rustytree")` no
+  longer auto-detects icechunk repos — users must construct the
+  icechunk `Session` themselves and pass `session.store`. This
+  matches xarray's stock `engine="zarr"` interface exactly and gives
+  users full control over branch / credentials / cache config (which
+  the URL dispatch hard-coded). Migration:
+  ```python
+  # before
+  dt = xr.open_datatree(
+      "s3://nexrad-arco/KLOT", engine="rustytree",
+      storage_options={"region": "us-east-1", "anon": True},
+  )
+  # after
+  import icechunk
+  storage = icechunk.s3_storage(
+      bucket="nexrad-arco", prefix="KLOT",
+      region="us-east-1", anonymous=True,
+  )
+  repo = icechunk.Repository.open(storage)
+  session = repo.readonly_session("main")
+  dt = xr.open_datatree(session.store, engine="rustytree")
+  ```
+  Local-FS path strings (`/path/to/repo`) still work for both
+  vanilla Zarr v3 and icechunk (auto-detected via the
+  `<root>/repo` + `<root>/snapshots/` heuristic). `s3://` URLs
+  still work for **vanilla Zarr v3** stores. Cross-extension
+  Session unwrap goes via `PySession.as_bytes()` →
+  `icechunk::session::Session::from_bytes` (msgpack); both crates
+  link the same `icechunk = "2"` so the format matches. Wall time on
+  `s3://nexrad-arco/KLOT` (107 groups, anonymous, cold-cache,
+  release build): **2.6 s** via the new path
+  (`Repository.open` ~300 ms user-side + 2.3 s rustytree). The
+  `tokio::join!` parallel-probe optimization ([#13]) is removed
+  along with the URL dispatch — pinpointed dead code now that
+  `s3_is_icechunk` no longer runs.
+
+### Added
+
+- `Variable.encoding["chunks"]` and `["preferred_chunks"]` ([#16]).
+  Every `Variable` produced by the entrypoint now carries the on-disk
+  chunk shape on `encoding`, so `xr.open_datatree(..., chunks={})`
+  produces dask arrays with the correct chunk grid (multi-chunk along
+  chunked dims) rather than a single big chunk per array. New
+  `ZarrsArrayHandle.chunks` getter (Rust) exposes the chunk shape via
+  `array.chunk_shape(&[0; N])`. New `tests/test_chunks.py` (4 tests)
+  verifies handle-side chunks, encoding round-trip, end-to-end
+  `chunks={}` correctness on a fixture with non-trivial chunking, and
+  values round-trip via dask `.compute()`.
+
 ### Added
 
 - `RustytreeBackendEntrypoint.open_datatree` + `open_dataset` end-to-end
@@ -253,3 +305,4 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 [#13]: https://github.com/aladinor/rustytree/pull/13
 [#14]: https://github.com/aladinor/rustytree/pull/14
 [#15]: https://github.com/aladinor/rustytree/pull/15
+[#16]: https://github.com/aladinor/rustytree/pull/16

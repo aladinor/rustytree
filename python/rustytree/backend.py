@@ -129,6 +129,52 @@ def _build_rust_kwargs(
     return kwargs
 
 
+def _to_rust_source(filename_or_obj: Any) -> Any:
+    """Translate the user's `filename_or_obj` into the shape the Rust
+    `open_datatree` expects.
+
+    Accepts:
+      - `icechunk.Session` -> serialise its inner `_session` (a PySession)
+        to msgpack bytes via `as_bytes()`. The bytes round-trip back
+        through `icechunk::session::Session::from_bytes` on the Rust
+        side; both crates link the same `icechunk` version so the format
+        matches. Snapshot of the session state at call time, which is
+        exactly what a read-side metadata walk needs.
+      - `icechunk.IcechunkStore` (what `session.store` returns) ->
+        reach in through `store._store.session.as_bytes()`. This uses
+        the documented-but-underscored attribute path; the parity tests
+        catch any breakage when icechunk-python refactors.
+      - `str` / `pathlib.Path` -> return `str(...)` unchanged. Treated
+        as a URL or local path on the Rust side.
+
+    The cross-extension `bytes` handoff exists because PyO3 type
+    extraction can't reach across cdylib boundaries: rustytree's
+    `_rustytree.so` and icechunk-python's `_icechunk_python.so` have
+    independent `type_object` instances for `PySession` even though
+    both link the same Rust crate. Bytes round-trip is the agreed
+    workaround until icechunk exposes a stable C-API or PyCapsule.
+    """
+    # Deferred import: only pulls in icechunk at the boundary, not at
+    # plugin discovery, so users who never use icechunk don't pay for
+    # it. Optional dependency from rustytree's POV.
+    try:
+        import icechunk
+    except ImportError:
+        icechunk = None  # type: ignore[assignment]
+
+    if icechunk is not None:
+        # An icechunk Session has `._session` (a PySession with as_bytes).
+        if isinstance(filename_or_obj, icechunk.Session):
+            return bytes(filename_or_obj._session.as_bytes())
+        # An IcechunkStore (i.e. `session.store`) wraps a PyStore
+        # whose `.session` is the same PySession.
+        if isinstance(filename_or_obj, icechunk.IcechunkStore):
+            return bytes(filename_or_obj._store.session.as_bytes())
+
+    # Anything else: assume str/Path-like.
+    return str(filename_or_obj)
+
+
 def _reroot(groups: dict[str, Dataset], root: str) -> dict[str, Dataset]:
     """Strip `root` from every absolute path, anchoring the result at "/"
     to match `xr.open_datatree(group=...)`'s subtree contract."""
@@ -174,10 +220,21 @@ def _node_to_dataset(
             data: Any = var["data"]
         else:
             data = indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
+        # Surface the on-disk chunk shape on `encoding` so xarray can
+        # honour `chunks={}` (preferred chunks) and round-trip
+        # `to_zarr`. Without these xarray's chunking pass collapses to
+        # a single chunk per dim and `chunks={}` produces dask arrays
+        # with the wrong shape.
+        chunks_tuple = tuple(var["handle"].chunks)
+        encoding = {
+            "chunks": chunks_tuple,
+            "preferred_chunks": dict(zip(dims, chunks_tuple)),
+        }
         raw_vars[name] = Variable(
             dims=dims,
             data=data,
             attrs=dict(var["attrs"]),
+            encoding=encoding,
         )
 
     with _metadata_only_datetime_dtype():
@@ -251,12 +308,25 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # class object) doesn't pay the cdylib load cost.
         from rustytree._rustytree import open_datatree as _rust_open
 
+        # `_to_rust_source` returns `bytes` for icechunk Session/Store
+        # inputs (cross-extension serialise round-trip) and `str` for
+        # path/URL inputs. The Rust side dispatches on type.
+        source = _to_rust_source(filename_or_obj)
+        # `storage_options` is meaningful only for vanilla S3 URLs; for
+        # icechunk-via-bytes the user already encoded credentials into
+        # the session before serialising. Drop it on the bytes path so
+        # we don't pretend to honour something we can't.
+        if isinstance(source, bytes):
+            storage_options_arg = None
+        else:
+            storage_options_arg = storage_options
+
         tree = _rust_open(
-            str(filename_or_obj),
+            source,
             **_build_rust_kwargs(
                 group=group,
                 branch=branch,
-                storage_options=storage_options,
+                storage_options=storage_options_arg,
                 max_concurrency=max_concurrency,
             ),
         )

@@ -14,7 +14,7 @@ use pyo3::Bound;
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use serde_json::Value as JsonValue;
 
 mod array;
@@ -32,19 +32,31 @@ use crate::error::Result;
 use crate::node::{EagerElements, NodeData, VarMeta};
 use crate::url::StoreSpec;
 
-/// Open a Zarr v3 store at `path` and return a metadata snapshot of every
-/// group in the tree rooted at `group` (default `"/"`).
+/// Open a Zarr v3 store and return a metadata snapshot of every group
+/// in the tree rooted at `group` (default `"/"`).
 ///
-/// `path` may be a local-filesystem path, a `file://` URL, or an `s3://`
-/// URL. Local paths auto-detect between icechunk repositories and vanilla
-/// Zarr v3 directories. S3 URLs do the same via a single HEAD on
-/// `<prefix>/repo`. `branch` selects the icechunk branch (default
-/// `"main"`); silently ignored on non-icechunk paths.
+/// `source` is one of:
+///   - **`bytes`**: msgpack-serialised `icechunk::session::Session`,
+///     produced by `icechunk-python`'s `PySession.as_bytes()`. The
+///     primary cross-extension handoff for icechunk: users construct
+///     the Session in icechunk-python with whatever branch / creds /
+///     cache config they want, then hand the bytes to us.
+///   - **`str`**: a local-filesystem path, `file://` URL, or `s3://`
+///     URL pointing at a **vanilla Zarr v3** store, OR a local-fs path
+///     pointing at an icechunk repository (auto-detected via the
+///     `<root>/repo` + `<root>/snapshots/` heuristic). Remote icechunk
+///     URL dispatch (the old `s3://...icechunk_repo` path) is no
+///     longer supported — pass session bytes instead.
 ///
-/// `storage_options` accepts the standard fsspec/xarray-style keys for the
-/// chosen scheme. For `s3://`: `region`, `endpoint`, `access_key_id`,
-/// `secret_access_key`, `session_token`, `allow_http`, `skip_signature`
-/// (alias `anon`). Unknown keys are rejected so typos surface immediately.
+/// `branch` selects the icechunk branch on local-fs icechunk paths
+/// (default `"main"`); silently ignored on every other input.
+///
+/// `storage_options` accepts the fsspec/xarray-style keys for `s3://`
+/// vanilla Zarr v3 inputs (`region`, `endpoint`, `access_key_id`,
+/// `secret_access_key`, `session_token`, `allow_http`,
+/// `skip_signature` / alias `anon`). Unknown keys are rejected.
+/// Ignored for `bytes` inputs (icechunk owns its own credentials via
+/// the user's session).
 ///
 /// `max_concurrency` caps the number of concurrent group-discovery I/O
 /// operations (default 32). Per-array fan-out within each group is
@@ -61,21 +73,43 @@ use crate::url::StoreSpec;
 /// }
 /// ```
 #[pyfunction]
-#[pyo3(signature = (path, *, group = None, branch = None, storage_options = None, max_concurrency = None))]
+#[pyo3(signature = (source, *, group = None, branch = None, storage_options = None, max_concurrency = None))]
 fn open_datatree<'py>(
     py: Python<'py>,
-    path: &str,
+    source: &Bound<'_, PyAny>,
     group: Option<&str>,
     branch: Option<&str>,
     storage_options: Option<&Bound<'_, PyDict>>,
     max_concurrency: Option<usize>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let spec = url::parse_store_spec(path)?;
+    let group_path = group.unwrap_or("/").to_string();
+    let max_concurrency_val = max_concurrency;
+
+    // Branch on input type: `bytes` = icechunk session handoff;
+    // `str`/`Path` = local path or vanilla Zarr v3 URL.
+    if let Ok(bytes) = source.cast::<PyBytes>() {
+        let session_bytes = bytes.as_bytes().to_vec();
+        let nodes = py.detach(move || -> Result<Vec<NodeData>> {
+            runtime::handle().block_on(async {
+                let store = icechunk_store::store_from_session_bytes(&session_bytes)?;
+                walk::walk_recursive(store, &group_path, max_concurrency_val).await
+            })
+        })?;
+        return nodes_to_pydict(py, &nodes);
+    }
+
+    // Fall through: string-shaped input (URL or path).
+    let path: String = source.extract().map_err(|_| {
+        PyValueError::new_err(
+            "rustytree.open_datatree: `source` must be either `bytes` (icechunk session) or \
+             `str`/`Path` (URL or local path); got an object of an unsupported type",
+        )
+    })?;
+    let spec = url::parse_store_spec(&path)?;
     let options = storage_options
         .map(parse_storage_options)
         .transpose()?
         .unwrap_or_default();
-    let group_path = group.unwrap_or("/").to_string();
     let branch = branch.map(str::to_string);
 
     let nodes = py.detach(move || -> Result<Vec<NodeData>> {
@@ -83,36 +117,14 @@ fn open_datatree<'py>(
             let store = match &spec {
                 StoreSpec::Local(p) => store::build_local_store(p, branch.as_deref()).await?,
                 StoreSpec::S3 { bucket, prefix } => {
-                    // Auto-detect icechunk vs vanilla layout via one HEAD on
-                    // `<prefix>/repo`. Cold-cache that probe pays full TLS +
-                    // DNS + TCP setup (~260 ms on AWS). To keep wall under
-                    // probe + icechunk_open, race the probe against the
-                    // icechunk open; if the probe rules out icechunk we drop
-                    // the in-flight open. The wasted icechunk request on
-                    // vanilla paths is the cost of preserving the auto-
-                    // detect contract — the alternative (try-icechunk-then-
-                    // fall-back) couples error handling to icechunk's
-                    // string-typed errors.
-                    let probe_fut = store::s3_is_icechunk(bucket, prefix, &options);
-                    let icechunk_fut = icechunk_store::open_s3_icechunk(
-                        bucket,
-                        prefix,
-                        branch.as_deref().unwrap_or("main"),
-                        &options,
-                    );
-                    let (probe_res, icechunk_res) = tokio::join!(probe_fut, icechunk_fut);
-                    if probe_res? {
-                        icechunk_res?
-                    } else {
-                        // Vanilla path; drop whatever the icechunk attempt
-                        // produced (likely a manifest-missing error) and
-                        // build the plain object_store-backed S3 store.
-                        drop(icechunk_res);
-                        store::build_vanilla_s3(bucket, prefix, &options)?
-                    }
+                    // Vanilla Zarr v3 only. icechunk-on-S3 used to live
+                    // here as an auto-detected URL dispatch; Phase 7
+                    // dropped it — users construct the icechunk Session
+                    // themselves and pass the session bytes instead.
+                    store::build_vanilla_s3(bucket, prefix, &options)?
                 }
             };
-            walk::walk_recursive(store, &group_path, max_concurrency).await
+            walk::walk_recursive(store, &group_path, max_concurrency_val).await
         })
     })?;
 

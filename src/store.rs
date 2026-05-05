@@ -6,8 +6,10 @@
 //! (routed through `zarrs_object_store::AsyncObjectStore` +
 //! `LocalFileSystem`).
 //!
-//! `s3://` URLs go through `AmazonS3Builder` (vanilla Zarr v3 only —
-//! icechunk-on-S3 dispatch lands in a follow-up PR). Other remote schemes
+//! `s3://` URLs go through `AmazonS3Builder` for **vanilla Zarr v3 only**.
+//! icechunk-on-S3 used to live here as URL dispatch; Phase 7 dropped that
+//! path — users construct the icechunk Session via `icechunk-python` and
+//! pass `session.store` to `xr.open_datatree`. Other remote schemes
 //! (`gs://`, `az://`, `http(s)://`) are not yet supported.
 
 use std::collections::HashMap;
@@ -15,10 +17,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use zarrs_object_store::AsyncObjectStore;
-use zarrs_object_store::object_store::ObjectStoreExt;
 use zarrs_object_store::object_store::aws::AmazonS3Builder;
 use zarrs_object_store::object_store::local::LocalFileSystem;
-use zarrs_object_store::object_store::path::Path as ObjectStorePath;
 use zarrs_storage::AsyncReadableListableStorage;
 
 use crate::error::{Result, RustytreeError};
@@ -83,47 +83,6 @@ pub(crate) fn build_vanilla_s3(
         RustytreeError::Other(format!("failed to build S3 store for {url}: {err}"))
     })?;
     Ok(Arc::new(AsyncObjectStore::new(store)))
-}
-
-/// Probe an S3 prefix to see if it points at an icechunk repository.
-///
-/// icechunk's on-prefix layout has a top-level `repo` manifest object;
-/// vanilla Zarr v3 stores have a top-level `zarr.json` instead. A single
-/// HEAD on `<prefix>/repo` distinguishes them. The probe respects
-/// `storage_options` so anonymous public buckets work without credentials.
-///
-/// Returns `Ok(true)` for icechunk, `Ok(false)` for vanilla. Network or
-/// auth failures (anything other than `NotFound`) propagate so the caller
-/// sees the real error instead of being silently routed to the wrong
-/// backend.
-pub(crate) async fn s3_is_icechunk(
-    bucket: &str,
-    prefix: &str,
-    options: &HashMap<String, String>,
-) -> Result<bool> {
-    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
-    for (key, value) in options {
-        builder = apply_s3_option(builder, key, value)?;
-    }
-    let client = builder.build().map_err(|err| {
-        RustytreeError::Other(format!(
-            "failed to build S3 client for s3://{bucket} (icechunk probe): {err}"
-        ))
-    })?;
-
-    let key = if prefix.is_empty() {
-        "repo".to_string()
-    } else {
-        format!("{prefix}/repo")
-    };
-    let path = ObjectStorePath::from(key);
-    match client.head(&path).await {
-        Ok(_) => Ok(true),
-        Err(zarrs_object_store::object_store::Error::NotFound { .. }) => Ok(false),
-        Err(err) => Err(RustytreeError::Other(format!(
-            "icechunk probe failed for s3://{bucket}/{prefix}: {err}"
-        ))),
-    }
 }
 
 /// Apply one fsspec/xarray-style S3 option to the builder.
