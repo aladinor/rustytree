@@ -20,6 +20,7 @@ use serde_json::Value as JsonValue;
 mod array;
 mod dtype_dispatch;
 mod error;
+mod glob;
 mod icechunk_store;
 mod node;
 mod runtime;
@@ -80,7 +81,11 @@ use crate::url::StoreSpec;
 /// }
 /// ```
 #[pyfunction]
-#[pyo3(signature = (source, *, group = None, branch = None, storage_options = None, max_concurrency = None, recursive = None))]
+#[pyo3(signature = (source, *, group = None, branch = None, storage_options = None, max_concurrency = None, recursive = None, glob = None))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PyO3 kwargs surface; bundling would change the user-facing signature."
+)]
 fn open_datatree<'py>(
     py: Python<'py>,
     source: &Bound<'_, PyAny>,
@@ -89,15 +94,18 @@ fn open_datatree<'py>(
     storage_options: Option<&Bound<'_, PyDict>>,
     max_concurrency: Option<usize>,
     recursive: Option<bool>,
+    glob: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let group_path = group.unwrap_or("/").to_string();
     let max_concurrency_val = max_concurrency;
     let recursive_val = recursive.unwrap_or(true);
+    let glob_predicate = glob.map(crate::glob::GlobPredicate::parse);
 
     // Branch on input type: `bytes` = icechunk session handoff;
     // `str`/`Path` = local path or vanilla Zarr v3 URL.
     if let Ok(bytes) = source.cast::<PyBytes>() {
         let session_bytes = bytes.as_bytes().to_vec();
+        let glob_predicate = glob_predicate.clone();
         let nodes = py.detach(move || -> Result<Vec<NodeData>> {
             runtime::handle().block_on(async {
                 let bundle = icechunk_store::bundle_from_session_bytes(&session_bytes)?;
@@ -106,6 +114,7 @@ fn open_datatree<'py>(
                     &group_path,
                     max_concurrency_val,
                     recursive_val,
+                    glob_predicate.as_ref(),
                 )
                 .await
             })
@@ -139,7 +148,14 @@ fn open_datatree<'py>(
                     store::WalkSource::Vanilla(store::build_vanilla_s3(bucket, prefix, &options)?)
                 }
             };
-            walk::walk_recursive(walk_source, &group_path, max_concurrency_val, recursive_val).await
+            walk::walk_recursive(
+                walk_source,
+                &group_path,
+                max_concurrency_val,
+                recursive_val,
+                glob_predicate.as_ref(),
+            )
+            .await
         })
     })?;
 
