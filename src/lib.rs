@@ -139,8 +139,7 @@ fn open_datatree<'py>(
                     store::WalkSource::Vanilla(store::build_vanilla_s3(bucket, prefix, &options)?)
                 }
             };
-            walk::walk_recursive(walk_source, &group_path, max_concurrency_val, recursive_val)
-                .await
+            walk::walk_recursive(walk_source, &group_path, max_concurrency_val, recursive_val).await
         })
     })?;
 

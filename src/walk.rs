@@ -103,13 +103,8 @@ pub(crate) async fn walk_recursive(
             // from icechunk's already-fetched in-memory snapshot tree
             // instead of issuing per-node `Group::async_open` /
             // `Array::async_open` round-trips through the session.
-            walk_icechunk_session_snapshot(
-                &bundle.session,
-                &bundle.store,
-                root_path,
-                recursive,
-            )
-            .await?
+            walk_icechunk_session_snapshot(&bundle.session, &bundle.store, root_path, recursive)
+                .await?
         }
         WalkSource::Vanilla(store) => {
             walk_via_zarrs(&store, root_path, &semaphore, recursive).await?
