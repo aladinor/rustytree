@@ -145,6 +145,44 @@ def _build_rust_kwargs(
 _GLOB_CHARS = re.compile(r"[*?\[]")
 
 
+def _check_zarr_v3_only(zarr_format: int | None, consolidated: bool | None) -> None:
+    """Reject xarray kwargs that would imply Zarr v2 mode.
+
+    rustytree currently only supports Zarr v3 (which icechunk uses
+    natively). The two kwargs xarray's stock ``engine="zarr"`` accepts
+    that imply v2 mode are:
+
+      - ``zarr_format=2``: explicit Zarr v2 store. Reject.
+      - ``consolidated=True``: read a ``.zmetadata`` consolidated index.
+        That index format is the v2 consolidated-metadata convention
+        (and the way it's commonly used today). icechunk's snapshot
+        plays the same role for icechunk repos, and v3 stores walk the
+        hierarchy directly via ``zarr.json``, so we reject this kwarg
+        and direct the user at ``engine="zarr"`` for v2 stores.
+
+    ``zarr_format=3`` / ``None`` and ``consolidated=False`` / ``None``
+    pass through silently — those are the v3 path.
+    """
+    # `zarr_format` is checked before `consolidated`: when both v2-implying
+    # kwargs are passed together, the user sees the more specific
+    # "Zarr v3 only" message first.
+    if zarr_format is not None and zarr_format != 3:
+        raise NotImplementedError(
+            f"rustytree currently supports Zarr v3 only; got "
+            f"zarr_format={zarr_format!r}. Use `engine='zarr'` for "
+            f"Zarr v{zarr_format} stores."
+        )
+    if consolidated is True:
+        raise NotImplementedError(
+            "rustytree does not support consolidated metadata "
+            "(`consolidated=True`); that's the Zarr v2 convention and "
+            "rustytree currently supports Zarr v3 only. icechunk's "
+            "snapshot plays the same role for icechunk repos. Use "
+            "`engine='zarr'` if you need consolidated v2 metadata, or "
+            "pass `consolidated=False` (or omit the kwarg) for Zarr v3."
+        )
+
+
 def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
     """Normalise a literal group path to absolute, canonical form.
     Globs are left alone: ``PurePosixPath.match`` treats relative
@@ -330,6 +368,11 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         "decode_coords",
         "use_cftime",
         "decode_timedelta",
+        # xarray's `engine="zarr"` accepts these; we accept them for
+        # call-site compatibility but reject the v2-implying values
+        # (see `_check_zarr_v3_only`).
+        "zarr_format",
+        "consolidated",
     )
 
     def open_datatree(
@@ -347,7 +390,10 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         decode_coords: bool | str = True,
         use_cftime: bool | None = None,
         decode_timedelta: bool | None = None,
+        zarr_format: int | None = None,
+        consolidated: bool | None = None,
     ) -> DataTree:
+        _check_zarr_v3_only(zarr_format, consolidated)
         # Lazy-imported so plugin discovery (which only needs the entrypoint
         # class object) doesn't pay the cdylib load cost.
         from rustytree._rustytree import open_datatree as _rust_open
@@ -431,7 +477,10 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         decode_coords: bool | str = True,
         use_cftime: bool | None = None,
         decode_timedelta: bool | None = None,
+        zarr_format: int | None = None,
+        consolidated: bool | None = None,
     ) -> Dataset:
+        _check_zarr_v3_only(zarr_format, consolidated)
         # `open_dataset` returns one Dataset, so for literal-path opens
         # (`group=None`/`"/"` or any non-glob path) we ask the Rust
         # walk to skip recursion past `group` — the descendants would
