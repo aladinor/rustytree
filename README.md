@@ -25,6 +25,17 @@ inference), the recursive multi-node walk, glob `group=` filtering, and
 non-recursive single-Dataset opens are all in. See
 [`CHANGELOG.md`](CHANGELOG.md) for the per-PR breakdown.
 
+## Compatibility
+
+| Surface | Supported | Not supported |
+|---|---|---|
+| **Zarr format** | v3 only | v2 — passing `zarr_format=2` or `consolidated=True` raises `NotImplementedError`; use stock `engine="zarr"` for v2 stores |
+| **icechunk** | `icechunk>=2.0` (the current major) | older icechunk releases |
+| **Python** | 3.12, 3.13 | older versions |
+| **Platforms** | manylinux x86_64, manylinux aarch64, macOS arm64 (wheels); other platforms via sdist | Windows / macOS Intel / linux musl wheels (build from source via sdist) |
+
+## Install
+
 Install from PyPI (the import name stays `rustytree`; the
 distribution name on PyPI is `rustytree-xarray` because `rustytree`
 collides with an unrelated dormant package):
