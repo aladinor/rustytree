@@ -25,6 +25,20 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 - Status badges in the README: CI status, PyPI version, supported
   Python versions, and license — all clickable to the relevant page.
 
+### Fixed
+
+- Accept `zarr_format` and `consolidated` kwargs in
+  `xr.open_datatree(..., engine="rustytree")` and
+  `xr.open_dataset(..., engine="rustytree")`. Previously the entrypoint
+  raised `TypeError: unexpected keyword argument` because the kwargs
+  weren't declared. They're now declared on both methods and validated:
+  v3-implying values (`zarr_format=3` / `None`, `consolidated=False` /
+  `None`) pass through silently; v2-implying values (`zarr_format=2`
+  or any non-3 int, `consolidated=True`) raise
+  `NotImplementedError` pointing the user at `engine="zarr"`. rustytree
+  currently supports Zarr v3 only; the icechunk snapshot plays the
+  consolidated-metadata role for icechunk repos.
+
 ## [0.1.0] - 2026-05-05
 
 First tagged release. The engine is end-to-end usable against

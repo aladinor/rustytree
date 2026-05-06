@@ -282,6 +282,74 @@ def test_literal_group_no_leading_slash_icechunk(
     xr.testing.assert_identical(rusty, zarr_ds)
 
 
+# ---- xarray-compat kwargs: zarr_format / consolidated ----
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},                                     # neither passed
+        {"zarr_format": None},                  # explicit None
+        {"zarr_format": 3},                     # explicit v3
+        {"consolidated": None},                 # explicit None
+        {"consolidated": False},                # the v3 path users commonly pass
+        {"zarr_format": 3, "consolidated": False},  # both together
+    ],
+)
+def test_v3_compatible_kwargs_pass_through(
+    multilevel_zarr_store: Path, kwargs: dict
+) -> None:
+    """xarray's stock `engine="zarr"` accepts `zarr_format` and
+    `consolidated` kwargs. We accept them too for call-site
+    compatibility — anything that implies Zarr v3 (or unspecified)
+    must pass through silently and produce the same result as the
+    no-kwarg call.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree", **kwargs
+    )
+    assert isinstance(dt, xr.DataTree)
+    assert sum(1 for _ in dt.subtree) > 1
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"zarr_format": 2}, "Zarr v3 only"),
+        # Any non-3 zarr_format is rejected — covers hypothetical v4+
+        # as well, not just v2. Keeps the "v3 only" contract explicit.
+        ({"zarr_format": 4}, "Zarr v3 only"),
+        ({"consolidated": True}, "consolidated metadata"),
+        # Both v2-implying kwargs together: zarr_format check fires first.
+        ({"zarr_format": 2, "consolidated": True}, "Zarr v3 only"),
+    ],
+)
+def test_v2_implying_kwargs_rejected(
+    multilevel_zarr_store: Path, kwargs: dict, match: str
+) -> None:
+    """`zarr_format=2` and `consolidated=True` both imply the Zarr v2
+    path, which rustytree does not support. The entrypoint must
+    reject them with a clear `NotImplementedError` pointing the user
+    at `engine="zarr"`."""
+    with pytest.raises(NotImplementedError, match=match):
+        xr.open_datatree(
+            str(multilevel_zarr_store), engine="rustytree", **kwargs
+        )
+
+
+def test_v2_implying_kwargs_rejected_open_dataset(
+    multilevel_zarr_store: Path,
+) -> None:
+    """Same v2 rejection applies to `open_dataset`."""
+    with pytest.raises(NotImplementedError, match="Zarr v3 only"):
+        xr.open_dataset(
+            str(multilevel_zarr_store),
+            engine="rustytree",
+            zarr_format=2,
+            group="/volume_a",
+        )
+
+
 def test_open_dataset_glob_group_rejects() -> None:
     """Glob `group=` patterns aren't meaningful for `open_dataset`
     (multi-match, single-Dataset return). The entrypoint should raise
