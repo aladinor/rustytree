@@ -242,6 +242,30 @@ below.
 
 ### Changed
 
+- Distribution name on PyPI is `rustytree-xarray` (atmoscale org).
+  The canonical `rustytree` is blocked by an unrelated dormant
+  package (`rusty-tree`, last released 2022); PyPI's name
+  normalisation collapses `-`/`_`/case so the bare name isn't
+  available without a PEP 541 reclaim. The import name stays
+  `rustytree` everywhere — `import rustytree`,
+  `engine="rustytree"`, the Python package directory, the Rust
+  crate. Only `pip install` changes.
+
+- Switch the manylinux aarch64 wheel cell to `ubuntu-24.04-arm`
+  (native AWS Graviton runner, free for public repos) instead of
+  cross-compiling via QEMU on `ubuntu-latest`. The QEMU path failed
+  in `ring`'s build script (its pre-generated ARM assembly bails
+  if the C preprocessor doesn't define `__ARM_ARCH`, which the
+  manylinux cross-gcc doesn't). Native build sidesteps the issue
+  and is ~3× faster wall-time.
+
+- Enable PyPI trusted publishing in the release workflow. The
+  `pypi-publish` job runs on every `vX.Y.Z` tag push after the
+  wheel + sdist matrix completes, using GitHub OIDC against the
+  `atmoscale/rustytree-xarray` trusted publisher and the `pypi`
+  environment (deployment-tag rule `v*.*.*`). No long-lived API
+  tokens.
+
 - Project license switched from `AGPL-3.0-or-later` to `Apache-2.0`
   for the v0.1.0 release. The previous AGPL choice (set in [#5])
   is replaced wholesale; the `LICENSE` file is the standard Apache

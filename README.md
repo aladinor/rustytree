@@ -19,8 +19,15 @@ inference), the recursive multi-node walk, glob `group=` filtering, and
 non-recursive single-Dataset opens are all in. See
 [`CHANGELOG.md`](CHANGELOG.md) for the per-PR breakdown.
 
-Not on PyPI yet — install from source per **Quick start** below. Once
-the first wheel ships, the install reduces to `pip install rustytree`.
+Install from PyPI (the import name stays `rustytree`; the
+distribution name on PyPI is `rustytree-xarray` because `rustytree`
+collides with an unrelated dormant package):
+
+```bash
+pip install rustytree-xarray
+```
+
+Or install from source per **Quick start** below.
 
 ## Example
 
