@@ -34,10 +34,13 @@ jobs:
           # tag the toolchain supports (manylinux_2_28 today).
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, manylinux: auto }
           # manylinux aarch64 — Graviton, ARM cloud, Raspberry Pi.
-          # `maturin-action` cross-compiles inside the manylinux
-          # container via QEMU; build is ~2× wall-time vs native x86_64
-          # but produces a real manylinux aarch64 wheel.
-          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, manylinux: auto }
+          # Native arm runner (`ubuntu-24.04-arm`, free for public
+          # repos): no QEMU emulation, no cross-compile toolchain
+          # quirks. Tried QEMU cross-compile first; `ring`'s ARM
+          # assembly bails because the manylinux cross-gcc doesn't
+          # define `__ARM_ARCH`. Native build sidesteps that and is
+          # ~3× faster too.
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, manylinux: auto }
           # Apple Silicon. The macos-14 runner is arm64-native, so the
           # default target works without cross-compile.
           - { os: macos-14, target: aarch64-apple-darwin, manylinux: auto }
@@ -108,26 +111,27 @@ jobs:
             --verify-tag \
             dist/*
 
-  # PyPI publish is intentionally OFF for the first release. To enable:
-  #   1. Configure trusted publishing on PyPI for `aladinor/rustytree`.
-  #   2. Uncomment the `pypi-publish` job below.
-  #   3. Drop `dry-run` if it's still there.
-  # Until then, `pip install rustytree` won't work — users install
-  # from a wheel attached to the GitHub Release, or build from sdist.
-  #
-  # pypi-publish:
-  #   name: PyPI publish
-  #   needs: [build-wheels, build-sdist]
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   runs-on: ubuntu-latest
-  #   environment: pypi   # set up in repo Settings → Environments
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         path: dist
-  #         merge-multiple: true
-  #     - uses: pypa/gh-action-pypi-publish@release/v1
-  #       with:
-  #         packages-dir: dist
+  # PyPI publish via OIDC trusted publishing. Requires:
+  #   - PyPI Pending/Trusted Publisher configured for the project name
+  #     `rustytree-xarray` (atmoscale org), pointing at this workflow
+  #     file and the `pypi` environment.
+  #   - GitHub repo Settings → Environments → `pypi` (with
+  #     deployment-tag rule `v*.*.*` for safety).
+  # Both done; flipping the job on means every `vX.Y.Z` tag
+  # publishes both a GitHub Release and a PyPI release.
+  pypi-publish:
+    name: PyPI publish
+    needs: [build-wheels, build-sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # mint short-lived OIDC tokens for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

@@ -3,7 +3,13 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "rustytree"
+# Distribution name on PyPI. Differs from the import name `rustytree`
+# (which stays unchanged in code, docs, and the xarray entrypoint
+# `engine="rustytree"`) because the canonical PyPI name `rustytree`
+# collides with the dormant `rusty-tree` project (PyPI normalizes
+# `-`/`_`/case so they collapse). Users `pip install rustytree-xarray`,
+# then `import rustytree`.
+name = "rustytree-xarray"
 version = "0.1.0"
 description = "Rust-backed xarray DataTree backend for fast Zarr access from object storage"
 readme = "README.md"
