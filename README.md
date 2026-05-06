@@ -1,6 +1,12 @@
-# rustytree
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-banner-dark.png">
+  <img src="assets/logo-banner-light.png" alt="rustytree — Rust-backed xarray DataTree backend" width="720">
+</picture>
 
-> Rust-backed xarray DataTree backend for fast Zarr (incl. icechunk) access from object storage.
+[![CI](https://github.com/aladinor/rustytree/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aladinor/rustytree/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/rustytree-xarray.svg)](https://pypi.org/project/rustytree-xarray/)
+[![Python versions](https://img.shields.io/pypi/pyversions/rustytree-xarray.svg)](https://pypi.org/project/rustytree-xarray/)
+[![License](https://img.shields.io/pypi/l/rustytree-xarray.svg)](https://github.com/aladinor/rustytree/blob/main/LICENSE)
 
 `rustytree` registers as `xr.open_datatree(engine="rustytree")` and walks Zarr
 v3 hierarchies — both icechunk-backed and vanilla — concurrently in async

@@ -11,6 +11,20 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Logo + README header. New `assets/logo.png` (transparent icon) and a
+  light/dark banner pair (`assets/logo-banner-{light,dark}.png` plus
+  SVG sources). README replaces the `# rustytree` heading with a
+  `<picture>` tag that auto-switches between light and dark variants
+  via `prefers-color-scheme`. Palette aligns with the AtmoScale brand
+  (cyan `#00D4FF`, deep navy `#0F1724`) with rust-orange tip accents
+  on the chunked-cube tree icon. All text passes WCAG AAA on its
+  intended background.
+
+- Status badges in the README: CI status, PyPI version, supported
+  Python versions, and license — all clickable to the relevant page.
+
 ## [0.1.0] - 2026-05-05
 
 First tagged release. The engine is end-to-end usable against
