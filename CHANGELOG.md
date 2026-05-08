@@ -11,6 +11,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-08
+
 ### Changed
 
 - `include_ancestor_coords=True` against an icechunk Session/Store now
@@ -518,7 +520,8 @@ below.
   intentionally not normalized — relative-vs-absolute glob
   semantics differ in `PurePosixPath.match`.
 
-[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/aladinor/rustytree/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/aladinor/rustytree/releases/tag/v0.1.0
 [#1]: https://github.com/aladinor/rustytree/pull/1
 [#3]: https://github.com/aladinor/rustytree/pull/3
