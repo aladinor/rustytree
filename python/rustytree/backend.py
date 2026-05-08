@@ -38,6 +38,7 @@ from xarray.backends.common import (
 from xarray.backends.store import StoreBackendEntrypoint
 from xarray.coding import times as _xtimes
 from xarray.core import indexing
+from xarray import merge
 from xarray.core.dataset import Dataset
 from xarray.core.datatree import DataTree
 from xarray.core.variable import Variable
@@ -392,6 +393,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         decode_timedelta: bool | None = None,
         zarr_format: int | None = None,
         consolidated: bool | None = None,
+        include_ancestor_coords: bool = True,
     ) -> DataTree:
         _check_zarr_v3_only(zarr_format, consolidated)
         # Lazy-imported so plugin discovery (which only needs the entrypoint
@@ -455,11 +457,40 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
             )
             for path, node in tree.items()
         }
-        # Reroot only for literal subtree paths. Glob results stay
-        # rooted at "/" because the matched paths span ancestors that
-        # may not share a common non-root prefix.
-        if group and group != ROOT and not is_glob:
+        # Glob results stay rooted at "/" — matched paths may span
+        # ancestors with no common non-root prefix; only literal
+        # subtree paths get rerooted and the ancestor merge.
+        is_literal_subtree = bool(group) and group != ROOT and not is_glob
+        if is_literal_subtree:
             groups = _reroot(groups, group)
+        # Promote ancestor groups onto the new root so a literal subtree
+        # open matches `dt_full[group].to_dataset(inherit="all_coords")`.
+        # `compat="override"`: new root wins over ancestors; closer
+        # ancestors win over farther (`PurePosixPath.parents` is
+        # closest-first).
+        if include_ancestor_coords and is_literal_subtree:
+            ancestor_dses = [
+                self.open_dataset(
+                    filename_or_obj,
+                    group=str(ancestor),
+                    drop_variables=drop_variables,
+                    branch=branch,
+                    storage_options=storage_options,
+                    max_concurrency=max_concurrency,
+                    mask_and_scale=mask_and_scale,
+                    decode_times=decode_times,
+                    concat_characters=concat_characters,
+                    decode_coords=decode_coords,
+                    use_cftime=use_cftime,
+                    decode_timedelta=decode_timedelta,
+                    zarr_format=zarr_format,
+                    consolidated=consolidated,
+                )
+                for ancestor in PurePosixPath(group).parents
+            ]
+            groups[ROOT] = merge(
+                [groups[ROOT], *ancestor_dses], compat="override"
+            )
         return datatree_from_dict_with_io_cleanup(groups)
 
     def open_dataset(

@@ -635,6 +635,125 @@ def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
     assert "/volume_a/sweep_0" in paths, paths
 
 
+# ---- include_ancestor_coords (literal-group ancestor merge) ----
+
+
+def test_literal_group_default_promotes_ancestor_coords(
+    multilevel_zarr_store: Path,
+) -> None:
+    """Literal `group=/volume_a/sweep_0` with the default flag should
+    surface ancestor variables on the new root: `temp` (from
+    `/volume_a`) as a data_var, and `x` (from `/`, dim-coord since it's
+    named after its only dim) as a coord. Without the flag the new
+    root would carry only the subgroup's own `dbz`.
+    """
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a/sweep_0",
+    )
+    root_ds = dt.dataset
+    # Subgroup's own variable.
+    assert "dbz" in root_ds.data_vars
+    # Promoted from `/volume_a`.
+    assert "temp" in root_ds.data_vars
+    # Promoted from `/`. Dim-named arrays become coords.
+    assert "x" in root_ds.coords
+
+
+def test_literal_group_opt_out_orphans_subtree(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`include_ancestor_coords=False` reverts to the orphaned-subtree
+    contract (matches the upstream prototype's default and the
+    pre-flag rustytree behavior)."""
+    dt = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a/sweep_0",
+        include_ancestor_coords=False,
+    )
+    root_ds = dt.dataset
+    assert "dbz" in root_ds.data_vars
+    assert "temp" not in root_ds.data_vars
+    assert "x" not in root_ds.coords
+
+
+def test_literal_group_root_is_noop(multilevel_zarr_store: Path) -> None:
+    """`group="/"` (or `group=None`) has no ancestors. The flag must
+    not alter the resulting tree — same path set and same root
+    dataset as a no-flag full-tree open."""
+    with_flag = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/",
+        include_ancestor_coords=True,
+    )
+    no_group = xr.open_datatree(
+        str(multilevel_zarr_store), engine="rustytree"
+    )
+    assert {n.path for n in with_flag.subtree} == {
+        n.path for n in no_group.subtree
+    }
+    xr.testing.assert_identical(with_flag.dataset, no_group.dataset)
+
+
+def test_glob_group_flag_is_noop(multilevel_zarr_store: Path) -> None:
+    """The flag only fires for literal non-root groups. Glob mode
+    already keeps ancestors as nodes via `_filter_by_glob`, so passing
+    `include_ancestor_coords=True` with a glob must produce the same
+    tree as `False`. Pins the no-op contract."""
+    on = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="*/sweep_0",
+        include_ancestor_coords=True,
+    )
+    off = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="*/sweep_0",
+        include_ancestor_coords=False,
+    )
+    assert {n.path for n in on.subtree} == {n.path for n in off.subtree}
+    for path in (n.path for n in on.subtree):
+        xr.testing.assert_identical(on[path].dataset, off[path].dataset)
+
+
+def test_literal_group_promotes_ancestor_coords_icechunk(
+    multilevel_icechunk_repo: Path,
+) -> None:
+    """The icechunk path is a separate Rust walk
+    (`walk_icechunk_session_snapshot`); the ancestor merge must work
+    there too. Per-ancestor `self.open_dataset` calls each take the
+    `recursive=False` icechunk fast-path."""
+    dt = xr.open_datatree(
+        str(multilevel_icechunk_repo),
+        engine="rustytree",
+        group="/volume_a/sweep_0",
+    )
+    root_ds = dt.dataset
+    assert "dbz" in root_ds.data_vars
+    assert "temp" in root_ds.data_vars
+    assert "x" in root_ds.coords
+
+
+def test_subtree_via_group_kwarg_default_unchanged_paths(
+    multilevel_zarr_store: Path,
+) -> None:
+    """Default `True` is a content change, not a shape change. The
+    existing `test_subtree_via_group_kwarg` path-set assertion must
+    still hold; this test pins it explicitly with the flag named so
+    the contract is searchable."""
+    sub = xr.open_datatree(
+        str(multilevel_zarr_store),
+        engine="rustytree",
+        group="/volume_a",
+        include_ancestor_coords=True,
+    )
+    assert {n.path for n in sub.subtree} == {"/", "/sweep_0", "/sweep_1"}
+
+
 # ---- KTWX smoke (network-free) ----
 
 KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
