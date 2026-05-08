@@ -13,6 +13,16 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- `include_ancestor_coords=True` (default) on
+  `xr.open_datatree(..., engine="rustytree", group=...)` for literal
+  group paths. Promotes ancestor group datasets into the new root so
+  `latitude`/`longitude`/`altitude` (and any other ancestor-level
+  coords/vars) are present after a subtree open — matches what users
+  get from a full-tree open + slice with
+  `inherit="all_coords"`. Glob mode (`group="*/sweep_0"`) is unchanged
+  (already correct via `_filter_by_glob`). Set to `False` to keep the
+  pre-flag orphaned-subtree behavior.
+
 - Logo + README header. New `assets/logo.png` (transparent icon) and a
   light/dark banner pair (`assets/logo-banner-{light,dark}.png` plus
   SVG sources). README replaces the `# rustytree` heading with a
