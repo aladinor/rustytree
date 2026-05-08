@@ -6,8 +6,10 @@ which builds wheels (manylinux x86_64 + manylinux aarch64 + macOS
 arm64, CPython 3.12 + 3.13), builds an sdist, and attaches
 everything to a GitHub Release with auto-generated notes.
 
-PyPI publishing is **off** for `0.1.0` — wheels live on the GitHub
-Release. See **Enable PyPI publishing** below for the flip.
+PyPI publishing is enabled via trusted-publishing OIDC; every
+`vX.Y.Z` tag publishes to PyPI alongside the GitHub Release. See
+**Enable PyPI publishing** below for the one-time setup that's
+already been done.
 
 ## Versioning
 
@@ -20,10 +22,16 @@ should not.
 1. Confirm `main` is green and look at `[Unreleased]` in
    [`CHANGELOG.md`](../CHANGELOG.md) to pick a version.
 2. Open a `chore/release-vX.Y.Z` branch and bump the version in
-   three places (must stay in sync):
+   four places (must stay in sync):
    - `Cargo.toml` `[package].version`
    - `pyproject.toml` `[project].version`
    - `python/rustytree/__init__.py` `__version__`
+   - `tests/test_phase1_scaffold.py::test_package_imports_with_version`
+     — the hardcoded `assert rustytree.__version__ == "X.Y.Z"`. It
+     stays hardcoded on purpose: reading the version from
+     `pyproject.toml` would tautologically compare the package
+     against itself, whereas a literal asserts the bump actually
+     landed everywhere it had to.
 3. Roll the CHANGELOG: rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty `## [Unreleased]`
    block above it, and update the link refs at the bottom of the
