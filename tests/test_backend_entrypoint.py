@@ -738,6 +738,55 @@ def test_literal_group_promotes_ancestor_coords_icechunk(
     assert "x" in root_ds.coords
 
 
+@pytest.mark.parametrize(
+    "group,sanity_coord",
+    [
+        ("/volume_a", "x"),                   # depth 1 → 1 ancestor (`/`)
+        ("/volume_a/sweep_0", "x"),           # depth 2 → 2 ancestors
+    ],
+)
+def test_icechunk_session_serialised_once_for_ancestor_merge(
+    multilevel_icechunk_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    group: str,
+    sanity_coord: str,
+) -> None:
+    """`include_ancestor_coords=True` against an icechunk Session must
+    serialise the session snapshot exactly once, regardless of group
+    depth — ancestor opens reuse the already-serialised `source` via
+    `_to_rust_source`'s `bytes` short-circuit. Counter-test pins the
+    contract so a future refactor that re-introduces per-ancestor
+    encodes surfaces here.
+    """
+    import icechunk
+
+    storage = icechunk.local_filesystem_storage(str(multilevel_icechunk_repo))
+    repo = icechunk.Repository.open(storage)
+    session = repo.readonly_session("main")
+
+    session_cls = type(session.store._store.session)
+    real_as_bytes = session_cls.as_bytes
+    calls = 0
+
+    def counting_as_bytes(self) -> bytes:
+        nonlocal calls
+        calls += 1
+        return real_as_bytes(self)
+
+    monkeypatch.setattr(session_cls, "as_bytes", counting_as_bytes)
+
+    dt = xr.open_datatree(
+        session.store,
+        engine="rustytree",
+        group=group,
+    )
+    # Sanity: the ancestor merge fired.
+    assert sanity_coord in dt.dataset.coords
+    assert calls == 1, (
+        f"as_bytes() called {calls} times for group={group!r}; expected 1."
+    )
+
+
 def test_subtree_via_group_kwarg_default_unchanged_paths(
     multilevel_zarr_store: Path,
 ) -> None:

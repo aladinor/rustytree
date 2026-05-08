@@ -11,6 +11,18 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- `include_ancestor_coords=True` against an icechunk Session/Store now
+  serialises the session snapshot exactly once, instead of once per
+  ancestor. Fixes #34 — addresses the audit finding from #33 that
+  each `self.open_dataset(...)` call in the ancestor-merge loop was
+  re-running `session.as_bytes()`. `_to_rust_source` short-circuits
+  on `bytes` input, and `open_datatree` threads its already-serialised
+  `source` through the loop. Behaviour-only refactor; measured saving
+  is small (~8 µs per depth-2 call against local KLOT, snapshot
+  size 600 B), so this is mostly a code-hygiene fix.
+
 ### Added
 
 - `include_ancestor_coords=True` (default) on
