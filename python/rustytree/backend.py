@@ -233,7 +233,15 @@ def _to_rust_source(filename_or_obj: Any) -> Any:
     independent `type_object` instances for `PySession` even though
     both link the same Rust crate. Bytes round-trip is the agreed
     workaround until icechunk exposes a stable C-API or PyCapsule.
+
+    `bytes` input is passed through unchanged so callers that already
+    serialised once (e.g. the ancestor-merge loop in `open_datatree`)
+    can re-enter `open_dataset` without re-encoding the same session
+    snapshot per ancestor.
     """
+    if isinstance(filename_or_obj, bytes):
+        return filename_or_obj
+
     # Deferred import: only pulls in icechunk at the boundary, not at
     # plugin discovery, so users who never use icechunk don't pay for
     # it. Optional dependency from rustytree's POV.
@@ -469,9 +477,11 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # ancestors win over farther (`PurePosixPath.parents` is
         # closest-first).
         if include_ancestor_coords and is_literal_subtree:
+            # `source` is reused so each ancestor open skips the
+            # icechunk session re-encode in `_to_rust_source`.
             ancestor_dses = [
                 self.open_dataset(
-                    filename_or_obj,
+                    source,
                     group=str(ancestor),
                     drop_variables=drop_variables,
                     branch=branch,

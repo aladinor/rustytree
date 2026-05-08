@@ -79,6 +79,19 @@ def test_unknown_object_falls_back_to_str() -> None:
     assert out == "custom://opaque"
 
 
+def test_bytes_input_passes_through_identity() -> None:
+    """`bytes` input short-circuits the icechunk encode path. This is
+    relied on by `open_datatree`'s ancestor-merge loop (passes the
+    already-serialised `source` so each ancestor open skips a fresh
+    `session.as_bytes()` call). Identity-equality (`is`) pins that no
+    copy or transform happens — re-encoding bytes would defeat the
+    point of the short-circuit.
+    """
+    payload = b"\x00\x01\x02pre-serialised-session-bytes\xff"
+    out = _to_rust_source(payload)
+    assert out is payload
+
+
 def test_works_when_icechunk_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """If the user doesn't have icechunk installed, `_to_rust_source`
     must still handle the str/Path branch — the icechunk import is
