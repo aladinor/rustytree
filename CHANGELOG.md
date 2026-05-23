@@ -11,6 +11,16 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-23
+
+### Fixed
+
+- Compatibility with icechunk 2.0.5: pin Rust-side `icechunk` crate to
+  `=2.0.5` and bump Python-side floor to `>=2.0.5`. Fixes #37.
+  The `Session::from_bytes` msgpack format changed between 2.0.4 and
+  2.0.5; the 0.2.0 wheel (built against 2.0.4) could not deserialise
+  session bytes produced by icechunk-python 2.0.5.
+
 ## [0.2.0] - 2026-05-08
 
 ### Changed

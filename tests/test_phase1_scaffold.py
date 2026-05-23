@@ -16,7 +16,7 @@ from rustytree.backend import RustytreeBackendEntrypoint
 
 
 def test_package_imports_with_version() -> None:
-    assert rustytree.__version__ == "0.2.0"
+    assert rustytree.__version__ == "0.2.1"
 
 
 def test_rust_extension_importable() -> None:

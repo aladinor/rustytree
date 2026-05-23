@@ -1,6 +1,6 @@
 [package]
 name = "rustytree"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.91.1"
 license = "Apache-2.0"
@@ -44,7 +44,7 @@ serde_json = "1"
 # icechunk `Session` as `AsyncReadableListableStorageTraits` so the walk
 # code stays polymorphic: the same `open_single` runs against either an
 # icechunk session or a vanilla object_store-backed store.
-icechunk = "2"
+icechunk = "=2.0.5"
 zarrs_icechunk = "0.5"
 
 [lints.clippy]
