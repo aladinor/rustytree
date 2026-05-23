@@ -60,7 +60,7 @@ jobs:
         # which would re-trigger a full cdylib rebuild on top of maturin develop
         # below (we'd build the wheel twice — saves ~80s per matrix cell).
         # Keep this list in sync with the `dev` extra in pyproject.toml.
-        run: uv pip install --python .venv/bin/python pytest pytest-cov 'zarr>=3.0' 'icechunk>=2.0' ruff
+        run: uv pip install --python .venv/bin/python pytest pytest-cov 'zarr>=3.0' 'icechunk>=2.0.5' ruff
       - name: Build extension (maturin develop)
         run: .venv/bin/maturin develop
       - name: pytest
