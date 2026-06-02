@@ -220,11 +220,11 @@ impl AzureCredentialsFetcher for PythonCredentialsFetcher<AzureRefreshableCreden
 mod tests {
     use super::*;
 
-    // The GIL-bound refresh path (`call_pickled`, `*_from_pyobj`,
-    // `Python::attach`) needs a live interpreter, which conflicts with the
-    // cdylib's `extension-module` feature in `cargo test`; it's covered by the
-    // pytest integration tests instead. Here we cover the pure-Rust surface:
-    // freshness logic and the typetag round-trip that makes deserialization work.
+    // The pure-Rust surface (freshness logic, typetag round-trip) runs
+    // unconditionally. The GIL-bound extractors (`*_from_pyobj`) need a live
+    // interpreter, so they run only under `cargo test --no-default-features`
+    // (where PyO3 links libpython) — the configuration CI uses; `unpickle` of a
+    // real Python callable still belongs to the pytest integration tests.
 
     #[test]
     fn fresh_when_no_expiry() {
@@ -279,6 +279,113 @@ mod tests {
         match decoded {
             S3Credentials::Refreshable(_) => {}
             other => panic!("expected Refreshable, got {other:?}"),
+        }
+    }
+
+    // --- GIL-bound duck-typing extractors -----------------------------------
+    //
+    // These need a live interpreter, so they only compile/run when libpython is
+    // linked (i.e. `extension-module` off — how CI runs `cargo test`). They
+    // build `types.SimpleNamespace` stand-ins for the Python credential objects
+    // the unpickled callable would return and assert the Rust mapping.
+    #[cfg(not(feature = "extension-module"))]
+    mod extractors {
+        use super::*;
+        use pyo3::types::PyDict;
+
+        /// Build a `types.SimpleNamespace(**attrs)` to stand in for a Python
+        /// `icechunk.*Credentials` object.
+        fn namespace<'py>(
+            py: Python<'py>,
+            attrs: &[(&str, Bound<'py, PyAny>)],
+        ) -> Bound<'py, PyAny> {
+            let kwargs = PyDict::new(py);
+            for (name, value) in attrs {
+                kwargs.set_item(name, value).expect("set namespace attr");
+            }
+            py.import("types")
+                .expect("import types")
+                .getattr("SimpleNamespace")
+                .expect("SimpleNamespace")
+                .call((), Some(&kwargs))
+                .expect("construct namespace")
+        }
+
+        fn s<'py>(py: Python<'py>, v: &str) -> Bound<'py, PyAny> {
+            v.into_pyobject(py).expect("str -> py").into_any()
+        }
+
+        #[test]
+        fn s3_extractor_reads_all_fields() {
+            Python::initialize();
+            Python::attach(|py| {
+                let obj = namespace(
+                    py,
+                    &[
+                        ("access_key_id", s(py, "AKIA")),
+                        ("secret_access_key", s(py, "secret")),
+                        ("session_token", s(py, "tok")),
+                        ("expires_after", py.None().into_bound(py)),
+                    ],
+                );
+                let creds = s3_from_pyobj(&obj).expect("extract S3 creds");
+                assert_eq!(creds.access_key_id, "AKIA");
+                assert_eq!(creds.secret_access_key, "secret");
+                assert_eq!(creds.session_token.as_deref(), Some("tok"));
+                assert_eq!(creds.expires_after, None);
+            });
+        }
+
+        #[test]
+        fn gcs_extractor_reads_bearer() {
+            Python::initialize();
+            Python::attach(|py| {
+                let obj = namespace(
+                    py,
+                    &[
+                        ("bearer", s(py, "ya29.token")),
+                        ("expires_after", py.None().into_bound(py)),
+                    ],
+                );
+                let creds = gcs_from_pyobj(&obj).expect("extract GCS creds");
+                assert_eq!(creds.bearer, "ya29.token");
+                assert_eq!(creds.expires_after, None);
+            });
+        }
+
+        #[test]
+        fn azure_extractor_discriminates_each_variant() {
+            Python::initialize();
+            Python::attach(|py| {
+                let none = || py.None().into_bound(py);
+
+                let access_key = namespace(py, &[("key", s(py, "k")), ("expires_after", none())]);
+                assert!(matches!(
+                    azure_from_pyobj(&access_key).expect("access key"),
+                    AzureRefreshableCredential::AccessKey { key, .. } if key == "k"
+                ));
+
+                let sas = namespace(py, &[("token", s(py, "t")), ("expires_after", none())]);
+                assert!(matches!(
+                    azure_from_pyobj(&sas).expect("sas token"),
+                    AzureRefreshableCredential::SASToken { token, .. } if token == "t"
+                ));
+
+                let bearer = namespace(py, &[("bearer", s(py, "b")), ("expires_after", none())]);
+                assert!(matches!(
+                    azure_from_pyobj(&bearer).expect("bearer"),
+                    AzureRefreshableCredential::BearerToken { bearer, .. } if bearer == "b"
+                ));
+            });
+        }
+
+        #[test]
+        fn azure_extractor_errors_on_unknown_shape() {
+            Python::initialize();
+            Python::attach(|py| {
+                let obj = namespace(py, &[("expires_after", py.None().into_bound(py))]);
+                assert!(azure_from_pyobj(&obj).is_err());
+            });
         }
     }
 }
