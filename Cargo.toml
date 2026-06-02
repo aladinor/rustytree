@@ -49,7 +49,15 @@ serde = { version = "1", features = ["derive"] }
 # exported) so we don't have to track its semver-incompatible version
 # bumps separately. The `fs` feature on `zarrs_object_store` enables
 # `LocalFileSystem` in the underlying object_store.
-zarrs = { version = "0.22", features = ["async"] }
+#
+# `zlib` enables zarrs's `numcodecs.zlib` codec — a non-standard but common
+# numcodecs-namespace codec that zarr-python writes (e.g. the GOES-16 arraylake
+# dataset uses `bytes -> numcodecs.shuffle -> numcodecs.zlib`). zarrs documents
+# its impl as byte-compatible with zarr-python's, mirroring how icechunk reads
+# such data by delegating to zarr-python's numcodecs shim. `numcodecs.shuffle`
+# is always compiled by zarrs; the other common compressors (gzip, blosc, zstd,
+# crc32c) come from zarrs's default features, which we keep enabled.
+zarrs = { version = "0.22", features = ["async", "zlib"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["fs", "aws"] }
 serde_json = "1"

@@ -204,11 +204,13 @@ def test_open_arraylake_goes16_refreshable_credentials() -> None:
     repo = client.get_repo("earthmover-public/goes-16")
     session = repo.readonly_session("main")
 
-    # This is the exact call that raised in the notebook.
+    # This is the exact call that raised in the notebook. It exercises both
+    # fixes: the credential-fetcher shim (deserialize) and the `numcodecs.zlib`
+    # codec (array construction for the shuffle+zlib-coded CMI variables).
     dt = xr.open_datatree(
         session.store,
         engine="rustytree",
         zarr_format=3,
         consolidated=False,
     )
-    assert "/" in dt.groups or dt.children or dt.dataset is not None
+    assert "/ABI-L2-MCMIPF" in dt.groups
