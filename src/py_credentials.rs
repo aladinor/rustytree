@@ -315,10 +315,15 @@ mod tests {
             v.into_pyobject(py).expect("str -> py").into_any()
         }
 
+        /// Initialize the interpreter (idempotent) and run `f` under the GIL.
+        fn with_python<F: for<'py> FnOnce(Python<'py>)>(f: F) {
+            Python::initialize();
+            Python::attach(f);
+        }
+
         #[test]
         fn s3_extractor_reads_all_fields() {
-            Python::initialize();
-            Python::attach(|py| {
+            with_python(|py| {
                 let obj = namespace(
                     py,
                     &[
@@ -338,8 +343,7 @@ mod tests {
 
         #[test]
         fn gcs_extractor_reads_bearer() {
-            Python::initialize();
-            Python::attach(|py| {
+            with_python(|py| {
                 let obj = namespace(
                     py,
                     &[
@@ -355,8 +359,7 @@ mod tests {
 
         #[test]
         fn azure_extractor_discriminates_each_variant() {
-            Python::initialize();
-            Python::attach(|py| {
+            with_python(|py| {
                 let none = || py.None().into_bound(py);
 
                 let access_key = namespace(py, &[("key", s(py, "k")), ("expires_after", none())]);
@@ -381,8 +384,7 @@ mod tests {
 
         #[test]
         fn azure_extractor_errors_on_unknown_shape() {
-            Python::initialize();
-            Python::attach(|py| {
+            with_python(|py| {
                 let obj = namespace(py, &[("expires_after", py.None().into_bound(py))]);
                 assert!(azure_from_pyobj(&obj).is_err());
             });
