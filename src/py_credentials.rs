@@ -71,11 +71,6 @@ use serde::{Deserialize, Serialize};
 /// have a credential-stampede problem worth jittering for.
 const REFRESH_BUFFER_SECS: i64 = 180;
 
-/// Tracking issue for the arraylake/Earthmover credential-fetcher gap; cited in
-/// user-facing errors. The Python backend keeps its own copy
-/// (`_ISSUE_40_URL`) — there's no shared Rust/Python constant to reuse.
-const ISSUE_40_URL: &str = "https://github.com/aladinor/rustytree/issues/40";
-
 /// Wire-compatible mirror of `icechunk-python`'s internal
 /// `PythonCredentialsFetcher<C>` (see module docs). The field names and order
 /// must match what `icechunk-python` serializes: `pickled_function` then
@@ -125,7 +120,7 @@ fn refresh_error(provider: &str, err: &PyErr) -> String {
          arraylake/Earthmover). Either rebuild it with anonymous or static \
          credentials, keep `scatter_initial_credentials=True` so fresh static \
          credentials travel with the session, or make the credential function \
-         importable in this process. See {ISSUE_40_URL}"
+         importable in this process."
     )
 }
 

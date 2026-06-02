@@ -152,10 +152,11 @@ def test_rust_open_or_explain_translates_credentials_error() -> None:
     with pytest.raises(ValueError, match="could not deserialize this icechunk session"):
         _rust_open_or_explain(boom, b"session-bytes")
 
-    # The original error is chained for debuggability.
+    # The message stays actionable, and the original error is chained for
+    # debuggability.
     with pytest.raises(ValueError) as excinfo:
         _rust_open_or_explain(boom, b"session-bytes")
-    assert "issues/40" in str(excinfo.value)
+    assert "anonymous or static credentials" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, ValueError)
     assert "PythonCredentialsFetcher" in str(excinfo.value.__cause__)
 

@@ -264,9 +264,6 @@ def _to_rust_source(filename_or_obj: Any) -> Any:
     return str(filename_or_obj)
 
 
-_ISSUE_40_URL = "https://github.com/aladinor/rustytree/issues/40"
-
-
 def _is_python_credentials_fetcher_error(exc: ValueError) -> bool:
     """True if `exc` is icechunk failing to deserialize a Python credentials
     fetcher whose typetag the Rust core doesn't register.
@@ -302,8 +299,7 @@ def _rust_open_or_explain(rust_open: Any, source: Any, **kwargs: Any) -> Any:
                 "means the installed icechunk-python is newer than the icechunk "
                 "version rustytree was built against and the credentials format "
                 "drifted. Align icechunk / icechunk-python versions, or rebuild the "
-                "session with anonymous or static credentials. "
-                f"See {_ISSUE_40_URL}"
+                "session with anonymous or static credentials."
             ) from exc
         raise
 
