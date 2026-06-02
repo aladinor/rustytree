@@ -16,7 +16,11 @@ from pathlib import Path
 import icechunk
 import pytest
 
-from rustytree.backend import _to_rust_source
+from rustytree.backend import (
+    _is_python_credentials_fetcher_error,
+    _rust_open_or_explain,
+    _to_rust_source,
+)
 
 
 def test_session_input_returns_bytes(tiny_icechunk_repo: Path) -> None:
@@ -105,3 +109,81 @@ def test_works_when_icechunk_unavailable(monkeypatch: pytest.MonkeyPatch) -> Non
 
     out = _to_rust_source("/path/with/no/icechunk")
     assert out == "/path/with/no/icechunk"
+
+
+# --- credentials-fetcher drift detection + friendly error -------------------
+#
+# The Rust core normally deserializes arraylake/Earthmover sessions via the
+# `src/py_credentials.rs` shim. These cover the Python-side safety net that
+# explains a *version drift* failure (an icechunk-python that reshapes the
+# fetcher), without needing S3/network.
+
+
+def test_detects_unknown_variant_drift_message() -> None:
+    exc = ValueError(
+        "icechunk session: unknown error: unknown variant "
+        "`PythonCredentialsFetcher`, there are no variants"
+    )
+    assert _is_python_credentials_fetcher_error(exc)
+
+
+def test_detects_renamed_fetcher_via_unknown_variant() -> None:
+    # Even if icechunk-python renames the fetcher, the "unknown variant ...
+    # there are no variants" shape still trips the detector.
+    exc = ValueError(
+        "icechunk session: unknown error: unknown variant "
+        "`SomeRenamedFetcher`, there are no variants"
+    )
+    assert _is_python_credentials_fetcher_error(exc)
+
+
+def test_rejects_unrelated_value_error() -> None:
+    exc = ValueError("icechunk session: invalid msgpack: corrupt blob")
+    assert not _is_python_credentials_fetcher_error(exc)
+
+
+def test_rust_open_or_explain_translates_credentials_error() -> None:
+    def boom(_source: object, **_kwargs: object) -> object:
+        raise ValueError(
+            "icechunk session: unknown error: unknown variant "
+            "`PythonCredentialsFetcher`, there are no variants"
+        )
+
+    with pytest.raises(ValueError, match="could not deserialize this icechunk session"):
+        _rust_open_or_explain(boom, b"session-bytes")
+
+    # The original error is chained for debuggability.
+    with pytest.raises(ValueError) as excinfo:
+        _rust_open_or_explain(boom, b"session-bytes")
+    assert "issues/40" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "PythonCredentialsFetcher" in str(excinfo.value.__cause__)
+
+
+def test_rust_open_or_explain_passes_through_other_errors() -> None:
+    def boom(_source: object, **_kwargs: object) -> object:
+        raise ValueError("icechunk session: corrupt blob")
+
+    with pytest.raises(ValueError, match="corrupt blob"):
+        _rust_open_or_explain(boom, b"session-bytes")
+
+
+def test_rust_open_or_explain_ignores_credentials_error_for_str_source() -> None:
+    # A path/URL source can't carry a Python credentials fetcher; even a
+    # matching message must re-raise unchanged rather than mislead.
+    def boom(_source: object, **_kwargs: object) -> object:
+        raise ValueError("unknown variant `X`, there are no variants")
+
+    with pytest.raises(ValueError, match="unknown variant"):
+        _rust_open_or_explain(boom, "/some/path")
+
+
+def test_rust_open_or_explain_returns_result_on_success() -> None:
+    sentinel = {"/": "node"}
+
+    def ok(source: object, **kwargs: object) -> object:
+        assert source == b"session-bytes"
+        assert kwargs == {"group": "/g"}
+        return sentinel
+
+    assert _rust_open_or_explain(ok, b"session-bytes", group="/g") is sentinel

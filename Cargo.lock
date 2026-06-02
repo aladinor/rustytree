@@ -2796,6 +2796,7 @@ version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12"
 dependencies = [
+ "chrono",
  "libc",
  "once_cell",
  "portable-atomic",
@@ -3348,13 +3349,18 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 name = "rustytree"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
+ "chrono",
  "futures",
  "icechunk",
  "numpy",
  "pyo3",
+ "rmp-serde",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "typetag",
  "zarrs",
  "zarrs_icechunk",
  "zarrs_object_store",
