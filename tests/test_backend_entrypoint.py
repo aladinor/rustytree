@@ -164,11 +164,6 @@ def test_get_variables_decodes_base64_fill_value() -> None:
     """A `_FillValue` carried in the Zarr attributes as the base64 raw
     fill-value wire form (as some virtual/icechunk stores emit) must be
     decoded to a numeric value, mirroring xarray's zarr backend
-    (`ZarrStore.open_store_variable`). Otherwise xarray's CFMaskCoder sees
-    a str `_FillValue` next to a numeric `missing_value` for the same
-    sentinel, emits a spurious "multiple fill values ... decoding all
-    values to NaN" warning, and the string form masks nothing. A numeric
-    `_FillValue` (and `missing_value`) must pass through untouched.
     """
     import base64
     import struct
