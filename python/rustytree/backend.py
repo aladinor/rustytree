@@ -36,6 +36,7 @@ from xarray.backends.common import (
     datatree_from_dict_with_io_cleanup,
 )
 from xarray.backends.store import StoreBackendEntrypoint
+from xarray.backends.zarr import FillValueCoder
 from xarray.coding import times as _xtimes
 from xarray.core import indexing
 from xarray import merge
@@ -313,11 +314,26 @@ class _RustyDataStore(AbstractDataStore):
                 if "data" in var
                 else indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
             )
-            chunks = tuple(var["handle"].chunks)
+            handle = var["handle"]
+            chunks = tuple(handle.chunks)
+            attrs = dict(var["attrs"])
+            # Parity with xarray's zarr backend (`ZarrStore.open_store_variable`):
+            # a `_FillValue` carried in the Zarr attributes as the raw fill-value
+            # wire form — a base64 string / bytes (float, raw, bytes dtypes) or a
+            # 2-element list (complex) — must be decoded to its numeric value
+            # before CF masking. We pass attrs through verbatim from `zarr.json`,
+            # so without this xarray's CFMaskCoder sees a *string* `_FillValue`
+            # alongside a numeric `missing_value` for the same sentinel, emits a
+            # spurious "variable '...' has multiple fill values ... decoding all
+            # values to NaN" SerializationWarning, and the string form silently
+            # masks nothing. A `_FillValue` that's already numeric is left as-is.
+            fv = attrs.get("_FillValue")
+            if isinstance(fv, (str, bytes, list, tuple)):
+                attrs["_FillValue"] = FillValueCoder.decode(fv, np.dtype(handle.dtype))
             out[var["name"]] = Variable(
                 dims=dims,
                 data=data,
-                attrs=dict(var["attrs"]),
+                attrs=attrs,
                 encoding={"chunks": chunks, "preferred_chunks": dict(zip(dims, chunks))},
             )
         return out

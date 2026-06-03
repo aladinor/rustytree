@@ -160,6 +160,49 @@ def test_rusty_data_store_satisfies_abstract_data_store(tiny_zarr_store: Path) -
     assert store.close() is None
 
 
+def test_get_variables_decodes_base64_fill_value() -> None:
+    """A `_FillValue` carried in the Zarr attributes as the base64 raw
+    fill-value wire form (as some virtual/icechunk stores emit) must be
+    decoded to a numeric value, mirroring xarray's zarr backend
+    (`ZarrStore.open_store_variable`). Otherwise xarray's CFMaskCoder sees
+    a str `_FillValue` next to a numeric `missing_value` for the same
+    sentinel, emits a spurious "multiple fill values ... decoding all
+    values to NaN" warning, and the string form masks nothing. A numeric
+    `_FillValue` (and `missing_value`) must pass through untouched.
+    """
+    import base64
+    import struct
+
+    from rustytree.backend import _RustyDataStore
+
+    fill = 1e20
+    # FillValueCoder encodes float fills as little-endian float64 bytes.
+    b64 = base64.standard_b64encode(struct.pack("<d", fill)).decode()
+
+    class _StubHandle:
+        chunks = (2,)
+        dtype = "float32"
+
+    node = {
+        "attrs": {},
+        "vars": [
+            {
+                "name": "v",
+                "dims": ["x"],
+                "data": np.array([1.0, 2.0], dtype="float32"),
+                "handle": _StubHandle(),
+                "attrs": {"_FillValue": b64, "missing_value": fill},
+            }
+        ],
+    }
+
+    variables = _RustyDataStore(node).get_variables()
+    fv = variables["v"].attrs["_FillValue"]
+    assert isinstance(fv, float) and fv == fill
+    # numeric `missing_value` is left untouched
+    assert variables["v"].attrs["missing_value"] == fill
+
+
 # ---- non-recursive walk (Phase 5/part 3) ----
 
 
