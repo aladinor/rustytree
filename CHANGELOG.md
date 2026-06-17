@@ -13,12 +13,14 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
-- `numcodecs.zlib` codec support ([#41]). Enables the `zlib` feature on
-  the `zarrs` dependency so rustytree can decode arrays whose codec
-  pipeline uses the non-standard `numcodecs.`-namespace codecs
+- `numcodecs.zlib` codec support ([#41], fixes #42). Enables the `zlib`
+  feature on the `zarrs` dependency so rustytree can decode arrays whose
+  codec pipeline uses the non-standard `numcodecs.`-namespace codecs
   zarr-python writes — e.g. the public `earthmover-public/goes-16`
-  arraylake dataset, which chains `bytes → numcodecs.shuffle →
-  numcodecs.zlib`. zarrs's `zlib` codec is documented byte-compatible
+  arraylake dataset (and the ismip6 icechunk store reported in #42, where
+  enabling it gave a ~10× speedup over `engine="zarr"`), which chain
+  `bytes → numcodecs.shuffle → numcodecs.zlib`. zarrs's `zlib` codec is
+  documented byte-compatible
   with zarr-python's; `numcodecs.shuffle` is always compiled, and
   `gzip` / `blosc` / `zstd` / `crc32c` already come from zarrs's
   default features. Verified bit-for-bit against zarr-python on a
