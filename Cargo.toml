@@ -21,11 +21,25 @@ default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-pyo3 = { version = "0.28" }
+# `chrono` feature lets us extract credential `expires_after` (a Python
+# `datetime`) straight into `DateTime<Utc>` in the credential-fetcher shim
+# (`src/py_credentials.rs`).
+pyo3 = { version = "0.28", features = ["chrono"] }
 numpy = "0.28"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 futures = "0.3"
 thiserror = "2"
+
+# Credential-fetcher shim (`src/py_credentials.rs`): re-register icechunk-python's
+# `PythonCredentialsFetcher` typetag inside our cdylib so `Session::from_bytes`
+# can deserialize arraylake/Earthmover sessions. `typetag` MUST match the version
+# icechunk links (`=0.2.21`) so the `inventory` registry is shared and our impls
+# are found by icechunk's `Session` deserializer; a skew silently splits the
+# registry. `chrono` unifies to icechunk's 0.4.x so `DateTime<Utc>` types match.
+typetag = "=0.2.21"
+async-trait = "0.1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
 
 # Zarr v3 reader stack. Remote object_store backends (S3/GCS/Azure/HTTP)
 # land in a follow-up; this PR ships local-filesystem only for both the
@@ -35,7 +49,15 @@ thiserror = "2"
 # exported) so we don't have to track its semver-incompatible version
 # bumps separately. The `fs` feature on `zarrs_object_store` enables
 # `LocalFileSystem` in the underlying object_store.
-zarrs = { version = "0.22", features = ["async"] }
+#
+# `zlib` enables zarrs's `numcodecs.zlib` codec — a non-standard but common
+# numcodecs-namespace codec that zarr-python writes (e.g. the GOES-16 arraylake
+# dataset uses `bytes -> numcodecs.shuffle -> numcodecs.zlib`). zarrs documents
+# its impl as byte-compatible with zarr-python's, mirroring how icechunk reads
+# such data by delegating to zarr-python's numcodecs shim. `numcodecs.shuffle`
+# is always compiled by zarrs; the other common compressors (gzip, blosc, zstd,
+# crc32c) come from zarrs's default features, which we keep enabled.
+zarrs = { version = "0.22", features = ["async", "zlib"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["fs", "aws"] }
 serde_json = "1"
@@ -46,6 +68,11 @@ serde_json = "1"
 # icechunk session or a vanilla object_store-backed store.
 icechunk = "=2.0.5"
 zarrs_icechunk = "0.5"
+
+[dev-dependencies]
+# Used by `src/py_credentials.rs` tests to round-trip `S3Credentials` through the
+# same msgpack codec icechunk's `Session::{as,from}_bytes` use.
+rmp-serde = "1"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -23,6 +23,11 @@ mod error;
 mod glob;
 mod icechunk_store;
 mod node;
+// No direct callers: the `#[typetag::serde]` impls in this module register
+// themselves into `inventory` at link time so icechunk's `Session` deserializer
+// can resolve arraylake/Earthmover credential fetchers. Declaring the module is
+// what compiles those registrations into the cdylib. See the module docs.
+mod py_credentials;
 mod runtime;
 mod store;
 mod url;

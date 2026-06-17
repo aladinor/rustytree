@@ -175,3 +175,42 @@ def test_open_nexrad_arco_klot_anon_s3() -> None:
     assert root["path"] == "/"
     assert isinstance(root["attrs"], dict)
     assert isinstance(root["vars"], list)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUSTYTREE_ARRAYLAKE_SMOKE") != "1",
+    reason=(
+        "arraylake-gated smoke test for issue #40 (set "
+        "RUSTYTREE_ARRAYLAKE_SMOKE=1 and be logged into arraylake to run)"
+    ),
+)
+def test_open_arraylake_goes16_refreshable_credentials() -> None:
+    """Regression for issue #40: open an arraylake/Earthmover icechunk session.
+
+    arraylake builds the session with a *refreshable* S3 credentials fetcher
+    serialized under the typetag `PythonCredentialsFetcher`. Before the
+    `src/py_credentials.rs` shim, `Session::from_bytes` rejected it with
+    "unknown variant `PythonCredentialsFetcher`, there are no variants". This
+    mirrors the notebook in `raw2zarr/notebooks/goes-16-vzarr.ipynb`.
+
+    arraylake-gated (needs the `arraylake` package + a login); opt-in via
+    `RUSTYTREE_ARRAYLAKE_SMOKE=1`.
+    """
+    import xarray as xr
+
+    arraylake = pytest.importorskip("arraylake")
+
+    client = arraylake.Client()
+    repo = client.get_repo("earthmover-public/goes-16")
+    session = repo.readonly_session("main")
+
+    # This is the exact call that raised in the notebook. It exercises both
+    # fixes: the credential-fetcher shim (deserialize) and the `numcodecs.zlib`
+    # codec (array construction for the shuffle+zlib-coded CMI variables).
+    dt = xr.open_datatree(
+        session.store,
+        engine="rustytree",
+        zarr_format=3,
+        consolidated=False,
+    )
+    assert "/ABI-L2-MCMIPF" in dt.groups

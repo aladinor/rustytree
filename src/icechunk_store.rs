@@ -124,6 +124,11 @@ pub(crate) async fn open_local_icechunk(path: &Path, branch: &str) -> Result<Ice
 ///     `Session`). Format stability is bounded by icechunk's semver;
 ///     we pin `icechunk = "2"` and CI must keep `icechunk` and
 ///     `icechunk-python` versions matched.
+///   - Sessions built by `icechunk-python` with *refreshable* credentials
+///     (e.g. arraylake / Earthmover) embed a `PythonCredentialsFetcher` typetag
+///     that the vanilla icechunk crate doesn't register. `crate::py_credentials`
+///     re-registers it inside our cdylib so `Session::from_bytes` here resolves
+///     it instead of failing with "unknown variant `PythonCredentialsFetcher`".
 pub(crate) fn bundle_from_session_bytes(bytes: &[u8]) -> Result<IcechunkBundle> {
     // Typed `?` propagation — `Session::from_bytes` returns
     // `SessionResult<Self>`, which converts to `RustytreeError` via the
