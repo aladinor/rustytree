@@ -178,6 +178,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reopen_spec_round_trips_through_rmp_serde() {
+        // The pickle state serialised in `ZarrsArrayHandle::__reduce__` is
+        // `(ReopenSpec, path)`; pin that the ReopenSpec half survives the same
+        // msgpack codec (a silent format break would corrupt every worker's
+        // reopen, which the Python E2E test wouldn't localise to here).
+        let spec = ReopenSpec::IcechunkSession {
+            bytes: vec![1, 2, 3, 4, 250, 128, 0],
+        };
+        let encoded = rmp_serde::to_vec(&spec).expect("serialize ReopenSpec");
+        let ReopenSpec::IcechunkSession { bytes } =
+            rmp_serde::from_slice(&encoded).expect("deserialize ReopenSpec");
+        assert_eq!(bytes, vec![1, 2, 3, 4, 250, 128, 0]);
+    }
+
+    #[test]
+    fn build_store_from_spec_rejects_garbage_session_bytes() {
+        // The reopen seam must surface bad session bytes as the icechunk-session
+        // error variant (→ Python ValueError), not panic on the worker.
+        let spec = ReopenSpec::IcechunkSession {
+            bytes: b"not a real icechunk session".to_vec(),
+        };
+        match build_store_from_spec(&spec) {
+            Err(RustytreeError::IcechunkSession(_)) => {}
+            Err(other) => panic!("expected IcechunkSession error, got {other:?}"),
+            Ok(_) => panic!("expected error for garbage session bytes"),
+        }
+    }
+
+    #[test]
     fn vanilla_local_succeeds_for_existing_dir() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"));
         assert!(build_vanilla_local(path).is_ok());
