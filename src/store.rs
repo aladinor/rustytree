@@ -16,13 +16,54 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use zarrs_object_store::AsyncObjectStore;
 use zarrs_object_store::object_store::aws::AmazonS3Builder;
 use zarrs_object_store::object_store::local::LocalFileSystem;
 use zarrs_storage::AsyncReadableListableStorage;
 
 use crate::error::{Result, RustytreeError};
-use crate::icechunk_store::{IcechunkBundle, looks_like_icechunk_repo, open_local_icechunk};
+use crate::icechunk_store::{
+    IcechunkBundle, bundle_from_session_bytes, looks_like_icechunk_repo, open_local_icechunk,
+};
+
+/// A serializable recipe for reopening a store on a fresh process — the state
+/// a [`crate::array::ZarrsArrayHandle`] carries so it can survive a pickle
+/// round-trip and reopen on a `dask.distributed` worker (see issue #44).
+///
+/// v1 covers only the icechunk-session path, and does so as a **pure mirror of
+/// icechunk's own serialization**: we retain the msgpack bytes produced by
+/// `icechunk-python`'s `PySession.as_bytes()` and reopen via
+/// `Session::from_bytes` (through [`bundle_from_session_bytes`]). rustytree adds
+/// **no** credential handling of its own — icechunk's typed credential enum
+/// rides along inside the bytes exactly as icechunk stores it, so `from_env` /
+/// `anonymous` sessions carry no secret into the task graph. Vanilla `s3://` /
+/// local stores have no icechunk `Session` to reuse and are a deliberate
+/// follow-up (a non-icechunk credential mechanism would not be a literal
+/// mirror). Handles built from those inputs carry no spec and refuse to pickle.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) enum ReopenSpec {
+    /// The msgpack bytes from `PySession.as_bytes()`. Kept as a plain `Vec<u8>`
+    /// so `serde` needs no `rc` feature; handles wrap the spec in an `Arc` to
+    /// share these (potentially large) bytes across a tree's arrays in memory.
+    // Follow-up: `#[serde(with = "serde_bytes")]` would encode this as a msgpack
+    // `bin` instead of an int array, shrinking the pickled state. Deferred with
+    // the other wire-size work (per-array duplication) — see issue #44.
+    IcechunkSession { bytes: Vec<u8> },
+}
+
+/// Build a [`WalkSource`] from a [`ReopenSpec`]. The single entry point shared
+/// by the initial open and the per-worker reopen, so both reconstruct the store
+/// exactly the same way. Sync today because the only variant
+/// (`bundle_from_session_bytes` → `Session::from_bytes`) is sync; add `async`
+/// back when a variant needs it (e.g. the vanilla-store follow-up).
+pub(crate) fn build_store_from_spec(spec: &ReopenSpec) -> Result<WalkSource> {
+    match spec {
+        ReopenSpec::IcechunkSession { bytes } => {
+            Ok(WalkSource::Icechunk(bundle_from_session_bytes(bytes)?))
+        }
+    }
+}
 
 /// What kind of store the walk should consume.
 ///
@@ -33,6 +74,18 @@ use crate::icechunk_store::{IcechunkBundle, looks_like_icechunk_repo, open_local
 pub(crate) enum WalkSource {
     Icechunk(IcechunkBundle),
     Vanilla(AsyncReadableListableStorage),
+}
+
+impl WalkSource {
+    /// The zarrs store backing this source. Used when reopening a single array
+    /// by path (the pickle-revive path) where the session's metadata walker is
+    /// not needed — only lazy chunk reads.
+    pub(crate) fn into_store(self) -> AsyncReadableListableStorage {
+        match self {
+            WalkSource::Icechunk(bundle) => bundle.store,
+            WalkSource::Vanilla(store) => store,
+        }
+    }
 }
 
 /// Build a [`WalkSource`] for a local-filesystem path.

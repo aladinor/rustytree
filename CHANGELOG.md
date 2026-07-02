@@ -13,6 +13,25 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Picklable array handles for `dask.distributed` ([#44], fixes #44).
+  DataArrays opened with `engine="rustytree"` could not be computed under a
+  `dask.distributed` cluster — `.compute()` failed while distributed pickled
+  the task graph, because each lazy chunk held a native
+  `ZarrsArrayHandle` that raised `TypeError: cannot pickle
+  'rustytree._rustytree.ZarrsArrayHandle' object`. `ZarrsArrayHandle` now
+  implements `__reduce__`: for stores opened via an icechunk `Session` (both
+  local-filesystem and remote S3, the cases in #44) the handle carries the
+  session's own `as_bytes()` msgpack plus the array path, and a worker revives
+  it via icechunk's `Session::from_bytes` + `Array::async_open`. This mirrors
+  icechunk exactly — rustytree adds **no** credential handling of its own, so
+  `from_env` / `anonymous` sessions carry no secret into the task graph. Opening
+  through an icechunk Session with `from_env` / `anonymous` / `refreshable`
+  credentials is the recommended distributed pattern. Vanilla `s3://` / local
+  Zarr stores are not yet picklable (no icechunk Session to mirror) and now
+  raise a clear, actionable error at pickle time instead of the opaque default.
+  New `tests/test_pickle.py` covers the pickle round-trip, the not-picklable
+  error path, and an opt-in `distributed`-marked `LocalCluster` compute.
+
 - `numcodecs.zlib` codec support ([#41], fixes #42). Enables the `zlib`
   feature on the `zarrs` dependency so rustytree can decode arrays whose
   codec pipeline uses the non-standard `numcodecs.`-namespace codecs
@@ -622,3 +641,4 @@ below.
 [#27]: https://github.com/aladinor/rustytree/pull/27
 [#41]: https://github.com/aladinor/rustytree/pull/41
 [#43]: https://github.com/aladinor/rustytree/pull/43
+[#44]: https://github.com/aladinor/rustytree/pull/44

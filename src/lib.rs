@@ -33,9 +33,12 @@ mod store;
 mod url;
 mod walk;
 
+use std::sync::Arc;
+
 use crate::array::ZarrsArrayHandle;
 use crate::error::Result;
 use crate::node::{EagerElements, NodeData, VarMeta};
+use crate::store::ReopenSpec;
 use crate::url::StoreSpec;
 
 /// Open a Zarr v3 store and return a metadata snapshot of every group
@@ -109,13 +112,20 @@ fn open_datatree<'py>(
     // Branch on input type: `bytes` = icechunk session handoff;
     // `str`/`Path` = local path or vanilla Zarr v3 URL.
     if let Ok(bytes) = source.cast::<PyBytes>() {
-        let session_bytes = bytes.as_bytes().to_vec();
+        // Reopen spec = a pure mirror of icechunk's own serialization: retain the
+        // `PySession.as_bytes()` msgpack and reopen via `Session::from_bytes`.
+        // One `Arc`, shared: the walk borrows it and every array's handle clones
+        // the `Arc` (not the bytes), so the session bytes are copied once.
+        let spec = Arc::new(store::ReopenSpec::IcechunkSession {
+            bytes: bytes.as_bytes().to_vec(),
+        });
         let glob_predicate = glob_predicate.clone();
+        let spec_for_walk = Arc::clone(&spec);
         let nodes = py.detach(move || -> Result<Vec<NodeData>> {
             runtime::handle().block_on(async {
-                let bundle = icechunk_store::bundle_from_session_bytes(&session_bytes)?;
+                let walk_source = store::build_store_from_spec(&spec_for_walk)?;
                 walk::walk_recursive(
-                    store::WalkSource::Icechunk(bundle),
+                    walk_source,
                     &group_path,
                     max_concurrency_val,
                     recursive_val,
@@ -124,7 +134,7 @@ fn open_datatree<'py>(
                 .await
             })
         })?;
-        return nodes_to_pydict(py, &nodes);
+        return nodes_to_pydict(py, &nodes, Some(&spec));
     }
 
     // Fall through: string-shaped input (URL or path).
@@ -164,7 +174,9 @@ fn open_datatree<'py>(
         })
     })?;
 
-    nodes_to_pydict(py, &nodes)
+    // Vanilla `s3://` / local stores are not picklable yet (no icechunk Session
+    // to mirror) — hand the handles no reopen spec, so they refuse to pickle.
+    nodes_to_pydict(py, &nodes, None)
 }
 
 /// Convert a Python dict of `storage_options` into an owned
@@ -186,36 +198,57 @@ fn parse_storage_options(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, S
 }
 
 /// Marshal a list of `NodeData` into a Python dict keyed by absolute path.
-fn nodes_to_pydict<'py>(py: Python<'py>, nodes: &[NodeData]) -> PyResult<Bound<'py, PyDict>> {
+///
+/// `spec` is the reopen recipe for this tree's store (issue #44): its `Arc` is
+/// cloned onto every array's `ZarrsArrayHandle` so it can pickle onto a dask
+/// worker, all sharing one copy of the (possibly large) session bytes. `None`
+/// for store types not yet picklable — those handles refuse to pickle.
+fn nodes_to_pydict<'py>(
+    py: Python<'py>,
+    nodes: &[NodeData],
+    spec: Option<&Arc<ReopenSpec>>,
+) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     for node in nodes {
-        dict.set_item(&node.path, node_to_pydict(py, node)?)?;
+        dict.set_item(&node.path, node_to_pydict(py, node, spec)?)?;
     }
     Ok(dict)
 }
 
 /// Marshal a `NodeData` into a Python dict using xarray-friendly key names.
-fn node_to_pydict<'py>(py: Python<'py>, node: &NodeData) -> PyResult<Bound<'py, PyDict>> {
+fn node_to_pydict<'py>(
+    py: Python<'py>,
+    node: &NodeData,
+    spec: Option<&Arc<ReopenSpec>>,
+) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("path", &node.path)?;
     dict.set_item("attrs", attrs_to_pydict(py, &node.attrs)?)?;
 
     let vars = PyList::empty(py);
     for var in &node.vars {
-        vars.append(var_to_pydict(py, var)?)?;
+        vars.append(var_to_pydict(py, var, spec)?)?;
     }
     dict.set_item("vars", vars)?;
     Ok(dict)
 }
 
-fn var_to_pydict<'py>(py: Python<'py>, var: &VarMeta) -> PyResult<Bound<'py, PyDict>> {
+fn var_to_pydict<'py>(
+    py: Python<'py>,
+    var: &VarMeta,
+    spec: Option<&Arc<ReopenSpec>>,
+) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("name", &var.name)?;
     dict.set_item("dims", &var.dims)?;
     dict.set_item("dtype", &var.dtype)?;
     dict.set_item("shape", &var.shape)?;
     dict.set_item("attrs", attrs_to_pydict(py, &var.attrs)?)?;
-    let handle = ZarrsArrayHandle::new(var.array.clone(), runtime::handle().handle().clone());
+    let handle = ZarrsArrayHandle::new(
+        var.array.clone(),
+        runtime::handle().handle().clone(),
+        spec.map(Arc::clone),
+    );
     dict.set_item("handle", Py::new(py, handle)?)?;
     if let Some(eager) = &var.eager {
         let arr = eager_to_pyarray(py, eager, &var.shape)?;
@@ -304,6 +337,9 @@ fn json_to_py<'py>(py: Python<'py>, value: &JsonValue) -> PyResult<Bound<'py, Py
 #[pymodule]
 fn _rustytree(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_datatree, m)?)?;
+    // Pickle reconstructor for `ZarrsArrayHandle.__reduce__` (issue #44). Public
+    // so `pickle` can import it by name on a dask worker.
+    m.add_function(wrap_pyfunction!(array::_reopen_array_handle, m)?)?;
     m.add_class::<ZarrsArrayHandle>()?;
     Ok(())
 }
