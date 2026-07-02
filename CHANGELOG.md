@@ -11,6 +11,50 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- `numcodecs.zlib` codec support ([#41], fixes #42). Enables the `zlib`
+  feature on the `zarrs` dependency so rustytree can decode arrays whose
+  codec pipeline uses the non-standard `numcodecs.`-namespace codecs
+  zarr-python writes — e.g. the public `earthmover-public/goes-16`
+  arraylake dataset (and the ismip6 icechunk store reported in #42, where
+  enabling it gave a ~10× speedup over `engine="zarr"`), which chain
+  `bytes → numcodecs.shuffle → numcodecs.zlib`. zarrs's `zlib` codec is
+  documented byte-compatible
+  with zarr-python's; `numcodecs.shuffle` is always compiled, and
+  `gzip` / `blosc` / `zstd` / `crc32c` already come from zarrs's
+  default features. Verified bit-for-bit against zarr-python on a
+  GOES-16 `CMI_C01` slice. New non-gated `tests/test_codecs.py` writes
+  the shuffle+zlib pipeline to a local store and checks the decode
+  round-trips.
+
+### Fixed
+
+- Open arraylake / Earthmover icechunk sessions ([#41], fixes #40).
+  `xr.open_datatree(session.store, engine="rustytree")` raised
+  `ValueError: icechunk session: unknown error: unknown variant
+  PythonCredentialsFetcher, there are no variants` for sessions
+  created via arraylake. Such sessions store S3 credentials as
+  `Refreshable(Arc<dyn S3CredentialsFetcher>)` whose concrete fetcher
+  is `#[typetag::serde]`-registered only inside icechunk-python's
+  cdylib; rustytree links the vanilla `icechunk` crate, whose fetcher
+  registry is empty, so `Session::from_bytes` couldn't resolve the tag.
+  `xr.open_zarr` is unaffected because it uses the live in-process
+  store and never round-trips through bytes. New `src/py_credentials.rs`
+  re-registers `PythonCredentialsFetcher` (S3 / GCS / Azure) inside
+  rustytree's cdylib, mirroring icechunk-python's `get()`: serve the
+  scattered `initial` static credentials while fresh, else acquire the
+  GIL and re-run the embedded pickled credential callable to refresh —
+  so the common case and `scatter_initial_credentials=False` /
+  mid-walk credential expiry all keep working. `typetag` is pinned
+  `=0.2.21` to share icechunk's `inventory` registry. A Python-side
+  friendly error (`_rust_open_or_explain` in `backend.py`) is a safety
+  net for a future icechunk-python that renames the fetcher. CI now
+  builds tests with `--no-default-features` so PyO3 links libpython:
+  the inventory-retained fetcher impls reference `Python::attach`, so
+  their libpython symbols can no longer be dead-code-eliminated from
+  the test binary.
+
 ## [0.2.1] - 2026-05-23
 
 ### Fixed
@@ -558,3 +602,4 @@ below.
 [#25]: https://github.com/aladinor/rustytree/pull/25
 [#26]: https://github.com/aladinor/rustytree/pull/26
 [#27]: https://github.com/aladinor/rustytree/pull/27
+[#41]: https://github.com/aladinor/rustytree/pull/41

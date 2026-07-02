@@ -265,6 +265,46 @@ def _to_rust_source(filename_or_obj: Any) -> Any:
     return str(filename_or_obj)
 
 
+def _is_python_credentials_fetcher_error(exc: ValueError) -> bool:
+    """True if `exc` is icechunk failing to deserialize a Python credentials
+    fetcher whose typetag the Rust core doesn't register.
+
+    The Rust core ships a shim (`src/py_credentials.rs`) that re-registers
+    icechunk-python's `PythonCredentialsFetcher`, so this normally doesn't fire.
+    It's a safety net for *version drift*: if a future icechunk-python renames or
+    reshapes that fetcher, `Session::from_bytes` again raises
+    ``unknown variant `...`, there are no variants`` and we want to explain the
+    mismatch instead of leaking the raw msgpack error. Matched two ways so a
+    rename still trips it.
+    """
+    msg = str(exc)
+    return "PythonCredentialsFetcher" in msg or (
+        "unknown variant" in msg and "there are no variants" in msg
+    )
+
+
+def _rust_open_or_explain(rust_open: Any, source: Any, **kwargs: Any) -> Any:
+    """Call the Rust `open_datatree`, translating the credentials-fetcher
+    deserialize failure into an actionable error.
+
+    Only icechunk-via-bytes inputs can hit this; path/URL sources can't carry a
+    Python credentials fetcher, so they re-raise unchanged.
+    """
+    try:
+        return rust_open(source, **kwargs)
+    except ValueError as exc:
+        if isinstance(source, bytes) and _is_python_credentials_fetcher_error(exc):
+            raise ValueError(
+                "rustytree could not deserialize this icechunk session: it carries "
+                "a credentials fetcher the Rust core does not recognize. This usually "
+                "means the installed icechunk-python is newer than the icechunk "
+                "version rustytree was built against and the credentials format "
+                "drifted. Align icechunk / icechunk-python versions, or rebuild the "
+                "session with anonymous or static credentials."
+            ) from exc
+        raise
+
+
 def _filter_by_glob(tree: dict[str, Any], pattern: str) -> dict[str, Any]:
     """Filter ``{path: NodeData}`` by glob, mirroring xarray PR #11302.
 
@@ -438,7 +478,8 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         is_glob = group is not None and bool(_GLOB_CHARS.search(group))
         group = _normalize_literal_group(group, is_glob)
 
-        tree = _rust_open(
+        tree = _rust_open_or_explain(
+            _rust_open,
             source,
             **_build_rust_kwargs(
                 group=None if is_glob else group,
@@ -551,7 +592,8 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         source = _to_rust_source(filename_or_obj)
         storage_options_arg = None if isinstance(source, bytes) else storage_options
 
-        tree = _rust_open(
+        tree = _rust_open_or_explain(
+            _rust_open,
             source,
             **_build_rust_kwargs(
                 group=group,
