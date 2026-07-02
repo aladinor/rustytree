@@ -36,11 +36,19 @@ use crate::icechunk_store::{
 /// `icechunk-python`'s `PySession.as_bytes()` and reopen via
 /// `Session::from_bytes` (through [`bundle_from_session_bytes`]). rustytree adds
 /// **no** credential handling of its own — icechunk's typed credential enum
-/// rides along inside the bytes exactly as icechunk stores it, so `from_env` /
-/// `anonymous` sessions carry no secret into the task graph. Vanilla `s3://` /
-/// local stores have no icechunk `Session` to reuse and are a deliberate
-/// follow-up (a non-icechunk credential mechanism would not be a literal
-/// mirror). Handles built from those inputs carry no spec and refuse to pickle.
+/// rides along inside the bytes exactly as icechunk stores it.
+///
+/// Credential exposure is therefore exactly icechunk's: `from_env` / `anonymous`
+/// sessions carry **no** secret into the task graph, whereas **static**
+/// credentials (and the scattered `initial` creds of a refreshable session) are
+/// embedded in these bytes and so travel to every worker in the pickled graph —
+/// identical to distributing an icechunk `Session` directly. For distributed use
+/// prefer `from_env` / `anonymous` / `refreshable` credentials.
+///
+/// Vanilla `s3://` / local stores have no icechunk `Session` to reuse and are a
+/// deliberate follow-up (a non-icechunk credential mechanism would not be a
+/// literal mirror). Handles built from those inputs carry no spec and refuse to
+/// pickle.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) enum ReopenSpec {
     /// The msgpack bytes from `PySession.as_bytes()`. Kept as a plain `Vec<u8>`
@@ -179,17 +187,22 @@ mod tests {
 
     #[test]
     fn reopen_spec_round_trips_through_rmp_serde() {
-        // The pickle state serialised in `ZarrsArrayHandle::__reduce__` is
-        // `(ReopenSpec, path)`; pin that the ReopenSpec half survives the same
-        // msgpack codec (a silent format break would corrupt every worker's
-        // reopen, which the Python E2E test wouldn't localise to here).
-        let spec = ReopenSpec::IcechunkSession {
-            bytes: vec![1, 2, 3, 4, 250, 128, 0],
-        };
-        let encoded = rmp_serde::to_vec(&spec).expect("serialize ReopenSpec");
-        let ReopenSpec::IcechunkSession { bytes } =
-            rmp_serde::from_slice(&encoded).expect("deserialize ReopenSpec");
+        // Pin the exact pickle-state wire format `ZarrsArrayHandle::__reduce__`
+        // serialises and `_reopen_array_handle` decodes: the `(ReopenSpec, path)`
+        // tuple, not just the spec. A tuple-shape or enum-tag drift would corrupt
+        // every worker's reopen — and the Python E2E test wouldn't localise it
+        // here.
+        let state = (
+            ReopenSpec::IcechunkSession {
+                bytes: vec![1, 2, 3, 4, 250, 128, 0],
+            },
+            "/volume_a/sweep_0/dbz".to_string(),
+        );
+        let encoded = rmp_serde::to_vec(&state).expect("serialize pickle state");
+        let (ReopenSpec::IcechunkSession { bytes }, path): (ReopenSpec, String) =
+            rmp_serde::from_slice(&encoded).expect("deserialize pickle state");
         assert_eq!(bytes, vec![1, 2, 3, 4, 250, 128, 0]);
+        assert_eq!(path, "/volume_a/sweep_0/dbz");
     }
 
     #[test]

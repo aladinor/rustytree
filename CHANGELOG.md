@@ -24,13 +24,21 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   session's own `as_bytes()` msgpack plus the array path, and a worker revives
   it via icechunk's `Session::from_bytes` + `Array::async_open`. This mirrors
   icechunk exactly — rustytree adds **no** credential handling of its own, so
-  `from_env` / `anonymous` sessions carry no secret into the task graph. Opening
-  through an icechunk Session with `from_env` / `anonymous` / `refreshable`
-  credentials is the recommended distributed pattern. Vanilla `s3://` / local
-  Zarr stores are not yet picklable (no icechunk Session to mirror) and now
-  raise a clear, actionable error at pickle time instead of the opaque default.
-  New `tests/test_pickle.py` covers the pickle round-trip, the not-picklable
-  error path, and an opt-in `distributed`-marked `LocalCluster` compute.
+  credential exposure is precisely icechunk's: `from_env` / `anonymous` sessions
+  carry no secret into the task graph, while **static** credentials (and a
+  refreshable session's scattered `initial` creds) are embedded in the session
+  bytes and travel to every worker in the pickled graph — the same as
+  distributing an icechunk Session directly. Opening through an icechunk Session
+  with `from_env` / `anonymous` / `refreshable` credentials is the recommended
+  distributed pattern. Workers must use the `spawn` start-method (the
+  `dask.distributed` default); rustytree's tokio runtime is not fork-safe, so
+  fork-based multiprocessing after opening a store is unsupported. Vanilla
+  `s3://` / local Zarr stores are not yet picklable (no icechunk Session to
+  mirror) and now raise a clear, actionable error at pickle time instead of the
+  opaque default. New `tests/test_pickle.py` covers the pickle round-trip
+  (including deeply-nested arrays and multi-hop re-pickling), the not-picklable
+  and corrupt-state error paths, and an opt-in `distributed`-marked
+  `LocalCluster` compute.
 
 - `numcodecs.zlib` codec support ([#41], fixes #42). Enables the `zlib`
   feature on the `zarrs` dependency so rustytree can decode arrays whose
