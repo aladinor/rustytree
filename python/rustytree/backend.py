@@ -357,11 +357,14 @@ class _RustyDataStore(AbstractDataStore):
             handle = var["handle"]
             chunks = tuple(handle.chunks)
             attrs = dict(var["attrs"])
-            # Parity with xarray's zarr backend (`ZarrStore.open_store_variable`)
-            # See PR 43 for details
+            # Mirror xarray's zarr backend: decode a base64 str/bytes `_FillValue`
+            # (raw zarr wire form, as icechunk/virtual stores emit) to a numeric
+            # sentinel so CF masking sees one fill value, not a str `_FillValue`
+            # beside a numeric `missing_value`. Numeric fills, and list/tuple wire
+            # forms `FillValueCoder` can't decode (e.g. complex), pass through.
             fv = attrs.get("_FillValue")
-            if isinstance(fv, (str, bytes, list, tuple)):
-                attrs["_FillValue"] = FillValueCoder.decode(fv, np.dtype(handle.dtype))
+            if isinstance(fv, (str, bytes)):
+                attrs["_FillValue"] = FillValueCoder.decode(fv, handle.dtype)
             out[var["name"]] = Variable(
                 dims=dims,
                 data=data,
