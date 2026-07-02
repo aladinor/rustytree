@@ -18,6 +18,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
+# These tests open with `chunks={}`, which routes through xarray's dask chunk
+# manager — so they need dask. dask is optional for rustytree (a runtime dep of
+# neither rustytree nor icechunk; only a dev/test extra), so skip cleanly rather
+# than erroring when it's absent, mirroring how icechunk keeps dask opt-in.
+pytest.importorskip("dask")
+
 
 def _readonly_store(repo_path: Path):
     """Reopen a committed local icechunk repo and return its readonly store."""
