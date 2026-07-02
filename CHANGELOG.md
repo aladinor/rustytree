@@ -30,6 +30,24 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Fixed
 
+- Spurious `SerializationWarning: variable '...' has multiple fill values`
+  and silently-broken masking for stores whose `_FillValue` is written in
+  raw Zarr wire form ([#43]). Some virtual/icechunk stores (e.g. the
+  source.coop ISMIP6 dataset) carry `_FillValue` as a base64-encoded
+  string (`'AAAAgB2vFUQ='`) alongside a numeric `missing_value`; xarray's
+  CF mask coder saw two distinct sentinels for the same value and warned,
+  and the base64 string masked nothing (a float array never equals a
+  `str`), so masking quietly fell back to `missing_value` alone.
+  `_RustyDataStore.get_variables` now mirrors xarray's zarr backend
+  (`ZarrStore.open_store_variable`): a base64 `str`/`bytes` `_FillValue`
+  is decoded to a numeric sentinel via `FillValueCoder.decode`, while an
+  already-numeric fill is left untouched. Verified byte-for-byte against
+  `engine="zarr"` on the ISMIP6 store (warnings 28 → 0, identical
+  `_FillValue` encoding and masking). Non-numeric list/tuple wire forms
+  (e.g. a complex `[real, imag]` fill) have no decoder branch and pass
+  through unchanged rather than raising. Network-free regression tests
+  cover the base64 decode, numeric pass-through, and list pass-through.
+
 - Open arraylake / Earthmover icechunk sessions ([#41], fixes #40).
   `xr.open_datatree(session.store, engine="rustytree")` raised
   `ValueError: icechunk session: unknown error: unknown variant
@@ -603,3 +621,4 @@ below.
 [#26]: https://github.com/aladinor/rustytree/pull/26
 [#27]: https://github.com/aladinor/rustytree/pull/27
 [#41]: https://github.com/aladinor/rustytree/pull/41
+[#43]: https://github.com/aladinor/rustytree/pull/43

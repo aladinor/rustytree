@@ -36,6 +36,7 @@ from xarray.backends.common import (
     datatree_from_dict_with_io_cleanup,
 )
 from xarray.backends.store import StoreBackendEntrypoint
+from xarray.backends.zarr import FillValueCoder
 from xarray.coding import times as _xtimes
 from xarray.core import indexing
 from xarray import merge
@@ -353,11 +354,21 @@ class _RustyDataStore(AbstractDataStore):
                 if "data" in var
                 else indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
             )
-            chunks = tuple(var["handle"].chunks)
+            handle = var["handle"]
+            chunks = tuple(handle.chunks)
+            attrs = dict(var["attrs"])
+            # Mirror xarray's zarr backend: decode a base64 str/bytes `_FillValue`
+            # (raw zarr wire form, as icechunk/virtual stores emit) to a numeric
+            # sentinel so CF masking sees one fill value, not a str `_FillValue`
+            # beside a numeric `missing_value`. Numeric fills, and list/tuple wire
+            # forms `FillValueCoder` can't decode (e.g. complex), pass through.
+            fv = attrs.get("_FillValue")
+            if isinstance(fv, (str, bytes)):
+                attrs["_FillValue"] = FillValueCoder.decode(fv, handle.dtype)
             out[var["name"]] = Variable(
                 dims=dims,
                 data=data,
-                attrs=dict(var["attrs"]),
+                attrs=attrs,
                 encoding={"chunks": chunks, "preferred_chunks": dict(zip(dims, chunks))},
             )
         return out

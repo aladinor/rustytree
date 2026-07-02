@@ -160,6 +160,84 @@ def test_rusty_data_store_satisfies_abstract_data_store(tiny_zarr_store: Path) -
     assert store.close() is None
 
 
+def test_get_variables_decodes_base64_fill_value() -> None:
+    """A `_FillValue` carried in the Zarr attributes as the base64 raw
+    fill-value wire form (as some virtual/icechunk stores emit) must be
+    decoded to a numeric value, mirroring xarray's zarr backend
+    """
+    import base64
+    import struct
+
+    from rustytree.backend import _RustyDataStore
+
+    fill = 1e20
+    # FillValueCoder encodes float fills as little-endian float64 bytes.
+    b64 = base64.standard_b64encode(struct.pack("<d", fill)).decode()
+
+    class _StubHandle:
+        chunks = (2,)
+        dtype = "float32"
+
+    node = {
+        "attrs": {},
+        "vars": [
+            {
+                "name": "v",
+                "dims": ["x"],
+                "data": np.array([1.0, 2.0], dtype="float32"),
+                "handle": _StubHandle(),
+                "attrs": {"_FillValue": b64, "missing_value": fill},
+            }
+        ],
+    }
+
+    variables = _RustyDataStore(node).get_variables()
+    fv = variables["v"].attrs["_FillValue"]
+    assert isinstance(fv, float) and fv == fill
+    # numeric `missing_value` is left untouched
+    assert variables["v"].attrs["missing_value"] == fill
+
+
+def _one_var_store(dtype: str, fill_value: object) -> dict:
+    from rustytree.backend import _RustyDataStore
+
+    class _StubHandle:
+        chunks = (2,)
+
+    handle = _StubHandle()
+    handle.dtype = dtype
+    node = {
+        "attrs": {},
+        "vars": [
+            {
+                "name": "v",
+                "dims": ["x"],
+                "data": np.array([1.0, 2.0], dtype="float32"),
+                "handle": handle,
+                "attrs": {"_FillValue": fill_value},
+            }
+        ],
+    }
+    return _RustyDataStore(node).get_variables()
+
+
+def test_get_variables_leaves_numeric_fill_value_untouched() -> None:
+    """An already-numeric `_FillValue` must pass through verbatim — it is
+    not a wire-form value, so `FillValueCoder.decode` (which expects
+    base64) must never be invoked on it."""
+    variables = _one_var_store("float32", 1.0000000200408773e20)
+    assert variables["v"].attrs["_FillValue"] == 1.0000000200408773e20
+
+
+def test_get_variables_passes_through_list_fill_value() -> None:
+    """A list/tuple `_FillValue` (e.g. a complex `[real, imag]` fill) has
+    no `FillValueCoder.decode` branch and would raise if decoded, so it
+    must pass through unchanged rather than crash the open. Regression
+    guard for the over-broad isinstance check in PR #43's first draft."""
+    variables = _one_var_store("complex64", [1.0, 2.0])
+    assert variables["v"].attrs["_FillValue"] == [1.0, 2.0]
+
+
 # ---- non-recursive walk (Phase 5/part 3) ----
 
 
