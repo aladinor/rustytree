@@ -13,6 +13,15 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Docs: a "Distributed compute (`dask.distributed` / Coiled)" section in
+  `docs/usage.md` ([#46]) covering the requirements for a remote cluster
+  (`spawn` workers, matching `rustytree` + `icechunk` in the worker environment)
+  and — mirroring icechunk's own guidance — how to avoid shipping secrets to
+  workers: use `from_env` / `refreshable` / `anonymous` credentials (secret-free
+  in the task graph) rather than `static` keys. Verified end-to-end that a
+  `from_env` session opened via rustytree pickles with no secret in the graph and
+  still computes on a distributed cluster.
+
 - Picklable array handles for `dask.distributed` ([#44], fixes #44).
   DataArrays opened with `engine="rustytree"` could not be computed under a
   `dask.distributed` cluster — `.compute()` failed while distributed pickled
