@@ -18,13 +18,14 @@ use numpy::PyArray1;
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::types::{PyBytes, PyTuple};
 use tokio::runtime::Handle;
 use zarrs::array::{Array, DataType};
 use zarrs::array_subset::ArraySubset;
 use zarrs_storage::AsyncReadableListableStorageTraits;
 
 use crate::dtype_dispatch::for_each_supported_dtype;
+use crate::store::ReopenSpec;
 
 /// A handle to an already-opened `zarrs::Array` that can read array
 /// subsets back to `NumPy`.
@@ -36,14 +37,27 @@ use crate::dtype_dispatch::for_each_supported_dtype;
 pub(crate) struct ZarrsArrayHandle {
     array: Arc<Array<dyn AsyncReadableListableStorageTraits>>,
     runtime: Handle,
+    /// How to reopen this array's store on a fresh process, so the handle can
+    /// survive a pickle round-trip onto a `dask.distributed` worker (issue #44).
+    /// `None` for store types not yet picklable (vanilla `s3://` / local) —
+    /// `__reduce__` then raises a clear error rather than a panic. `Arc` so all
+    /// handles in one tree share one copy of the (potentially large) spec. The
+    /// array's own path (`array.path()`) supplies the other half of the pickle
+    /// state, so we don't store it separately.
+    spec: Option<Arc<ReopenSpec>>,
 }
 
 impl ZarrsArrayHandle {
     pub(crate) fn new(
         array: Arc<Array<dyn AsyncReadableListableStorageTraits>>,
         runtime: Handle,
+        spec: Option<Arc<ReopenSpec>>,
     ) -> Self {
-        Self { array, runtime }
+        Self {
+            array,
+            runtime,
+            spec,
+        }
     }
 }
 
@@ -80,6 +94,40 @@ impl ZarrsArrayHandle {
     #[getter]
     fn dtype(&self) -> String {
         zarrs_dtype_to_numpy_str(self.array.data_type())
+    }
+
+    /// Pickle support (issue #44): make the handle survive a `dask.distributed`
+    /// task-graph serialization by reducing it to `(reconstructor, (state,))`,
+    /// where `state` is the msgpack of `(reopen_spec, array_path)`. The worker
+    /// calls [`_reopen_array_handle`] to rebuild the store and re-open the array.
+    ///
+    /// Only handles that carry a reopen spec (icechunk-session stores) are
+    /// picklable; others raise a clear error rather than the opaque default
+    /// `cannot pickle 'ZarrsArrayHandle'`. No credential handling lives here —
+    /// the spec is icechunk's own serialized session (see [`ReopenSpec`]).
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, PyBytes>,))> {
+        let Some(spec) = &self.spec else {
+            return Err(PyValueError::new_err(
+                "rustytree: this array is not picklable — pickling (e.g. for \
+                 dask.distributed) is currently supported only for stores opened via an \
+                 icechunk Session, not vanilla s3:// / local Zarr stores. Either open the \
+                 store through an icechunk Session, or compute with the threaded scheduler \
+                 (`dask.config.set(scheduler=\"threads\")`).",
+            ));
+        };
+        let state =
+            rmp_serde::to_vec(&(spec.as_ref(), self.array.path().as_str())).map_err(|err| {
+                PyValueError::new_err(format!(
+                    "rustytree: failed to serialise array handle: {err}"
+                ))
+            })?;
+        let reconstructor = py
+            .import("rustytree._rustytree")?
+            .getattr("_reopen_array_handle")?;
+        Ok((reconstructor, (PyBytes::new(py, &state),)))
     }
 
     /// Read a hyperrectangular slab of the array.
@@ -275,6 +323,42 @@ fn slice_nd<T: Copy>(
             idx[axis] = 0;
         }
     }
+}
+
+/// Reconstruct a `ZarrsArrayHandle` from its pickled state (see
+/// [`ZarrsArrayHandle::__reduce__`]). Called on a `dask.distributed` worker to
+/// revive a handle: rebuild the store from the reopen spec (icechunk
+/// `Session::from_bytes`, via `build_store_from_spec`) and re-open the single
+/// array by path. This mirrors the initial open — reusing icechunk's own serde,
+/// with no rustytree-side credential handling.
+#[pyfunction]
+pub(crate) fn _reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<ZarrsArrayHandle> {
+    let (spec, path): (ReopenSpec, String) = rmp_serde::from_slice(state).map_err(|err| {
+        PyValueError::new_err(format!(
+            "rustytree: corrupt ZarrsArrayHandle pickle state: {err}"
+        ))
+    })?;
+
+    let runtime = crate::runtime::handle();
+    // Release the GIL while rebuilding the store + reading `<path>/zarr.json`
+    // over the network, matching `read_subset`.
+    let array = py.detach(|| -> crate::error::Result<_> {
+        runtime.block_on(async {
+            let store = crate::store::build_store_from_spec(&spec)?.into_store();
+            let array = Array::async_open(store, &path).await.map_err(|err| {
+                crate::error::RustytreeError::Other(format!(
+                    "rustytree: failed to reopen array {path:?} on worker: {err}"
+                ))
+            })?;
+            Ok(Arc::new(array))
+        })
+    })?;
+
+    Ok(ZarrsArrayHandle::new(
+        array,
+        runtime.handle().clone(),
+        Some(Arc::new(spec)),
+    ))
 }
 
 /// Translate `zarrs::array::DataType` to the canonical `NumPy` dtype

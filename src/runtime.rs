@@ -7,6 +7,16 @@
 //! `Python::allow_threads(...)` before invoking `runtime.block_on(...)`.
 //!
 //! Initialised on first access via `OnceLock`; never torn down.
+//!
+//! **Not fork-safe.** A tokio runtime's worker/IO-driver threads do not survive
+//! `fork()`, so a process that inherited an already-built runtime would hang on
+//! `block_on`. `dask.distributed` uses the `spawn` start-method by default (a
+//! fresh interpreter per worker), which sidesteps this entirely and is the
+//! supported path for issue #44. Fork-based multiprocessing (e.g.
+//! `multiprocessing` / `ProcessPoolExecutor` with the Linux-default `fork`
+//! start-method) after a store has been opened is unsupported. Making the
+//! runtime survive fork (rebuild-on-PID-change + route `read_subset` through
+//! `handle()` instead of a cached `Handle`) is tracked as a follow-up.
 
 use std::sync::OnceLock;
 use tokio::runtime::{Builder, Runtime};

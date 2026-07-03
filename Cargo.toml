@@ -69,9 +69,10 @@ serde_json = "1"
 icechunk = "=2.0.5"
 zarrs_icechunk = "0.5"
 
-[dev-dependencies]
-# Used by `src/py_credentials.rs` tests to round-trip `S3Credentials` through the
-# same msgpack codec icechunk's `Session::{as,from}_bytes` use.
+# msgpack codec — the same one icechunk's `Session::{as,from}_bytes` use. We use
+# it to serialise the `ZarrsArrayHandle` pickle state (`ReopenSpec` + array path)
+# for `dask.distributed` (issue #44), and `src/py_credentials.rs` tests reuse it
+# to round-trip `S3Credentials`.
 rmp-serde = "1"
 
 [lints.clippy]
