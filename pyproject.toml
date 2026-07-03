@@ -40,7 +40,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "zarr>=3.0",
-    "icechunk>=2.0.5",
+    # Pin to icechunk's 2.1 minor: the msgpack `Session` bytes format is coupled
+    # to the icechunk version rustytree's Rust extension links (`=2.1.0`), so the
+    # Python and Rust icechunk must share a minor or `Session::from_bytes` fails
+    # to recognise the store (the 2.0.5-vs-2.0.6 skew that motivated this bump).
+    "icechunk>=2.1.0,<2.2",
     "ruff>=0.5.0",
     # Exercises the issue-#44 regression: computing rustytree arrays under a
     # real dask.distributed LocalCluster (see the `distributed` marker).

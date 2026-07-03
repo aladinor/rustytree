@@ -55,6 +55,25 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   the shuffle+zlib pipeline to a local store and checks the decode
   round-trips.
 
+### Changed
+
+- Bump the pinned `icechunk` from 2.0.5 to 2.1.0 ([#46]). rustytree links the
+  `icechunk` Rust crate and round-trips sessions through
+  `Session::{as,from}_bytes`, so it can only open stores whose on-disk format
+  matches its pinned icechunk — 2.0.5 could not open repositories written by
+  icechunk 2.0.6+, failing in `Repository::open` with "the repository doesn't
+  exist" even though the store was present and the credentials valid. Bumping to
+  2.1.0 restores access to current icechunk stores; `typetag` moves to `=0.2.22`
+  to keep sharing icechunk's `inventory` credential-fetcher registry (the #41
+  `py_credentials` shim). The `dev` extra and CI now require
+  `icechunk>=2.1.0,<2.2` so the Python and Rust icechunk versions share a minor —
+  the msgpack session-bytes format is coupled across the FFI boundary, and a skew
+  is exactly what produced the "repository doesn't exist" failure. No rustytree
+  source changes were needed (the API surface is unchanged). Verified end-to-end
+  against a real credentialed AWS S3 icechunk 2.0.6 store: parity with
+  `engine="zarr"`, pickle round-trip, and a distributed `LocalCluster` compute
+  whose workers reopen the store from the pickled session.
+
 ### Fixed
 
 - Spurious `SerializationWarning: variable '...' has multiple fill values`
@@ -650,3 +669,4 @@ below.
 [#41]: https://github.com/aladinor/rustytree/pull/41
 [#43]: https://github.com/aladinor/rustytree/pull/43
 [#44]: https://github.com/aladinor/rustytree/pull/44
+[#46]: https://github.com/aladinor/rustytree/pull/46
