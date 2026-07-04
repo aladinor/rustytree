@@ -71,7 +71,7 @@ ds = xr.open_dataset(session.store, engine="rustytree",
 # canonical radar workflow — returns a tree filtered to those matches,
 # with the VCP container groups auto-included as ancestors.
 sweeps_0 = xr.open_datatree(session.store, engine="rustytree",
-                            group="/*/sweep_0")
+                            group_filter="/*/sweep_0")
 ```
 
 `engine="rustytree"` is a drop-in replacement for `engine="zarr"` —

@@ -78,6 +78,14 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- CI now runs `ruff check` and `ruff format --check` in a dedicated `lint` job,
+  and `ruff` is pinned (`>=0.15.8,<0.16`) in the `dev` extra so local and CI
+  formatting agree ([#50], fixes #48). Previously CI installed `ruff` but never
+  invoked it, so lint/format drift accumulated silently on `main`; this normalises
+  the drifted files (`backend.py`, `conftest.py`, `test_backend_entrypoint.py`,
+  `test_codecs.py`, `klot_demo.ipynb`) in one no-logic-change pass and gates
+  against recurrence. No runtime behaviour change.
+
 - **Breaking:** `group=` is now exact-path only and no longer auto-detects glob
   patterns ([#49]). Previously a `group=` value containing `*`, `?`, or `[`
   silently switched to glob filtering; that overloaded behaviour is removed in
@@ -110,6 +118,12 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   whose workers reopen the store from the pickled session.
 
 ### Fixed
+
+- Docs and the `klot_demo` notebook still used the removed glob-`group=`
+  form (`group="*/sweep_0"`) that [#49] turned into a literal-path lookup —
+  the examples would now raise instead of filtering. Migrated `README.md`,
+  `docs/usage.md`, and `notebooks/klot_demo.ipynb` to `group_filter=`
+  ([#50]).
 
 - Spurious `SerializationWarning: variable '...' has multiple fill values`
   and silently-broken masking for stores whose `_FillValue` is written in
@@ -707,3 +721,4 @@ below.
 [#46]: https://github.com/aladinor/rustytree/pull/46
 [#47]: https://github.com/aladinor/rustytree/pull/47
 [#49]: https://github.com/aladinor/rustytree/pull/49
+[#50]: https://github.com/aladinor/rustytree/pull/50

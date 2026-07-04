@@ -67,9 +67,7 @@ def test_multilevel_data_round_trip(multilevel_zarr_store: Path) -> None:
 
 
 def test_subtree_via_group_kwarg(multilevel_zarr_store: Path) -> None:
-    sub = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/volume_a"
-    )
+    sub = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group="/volume_a")
     assert {n.path for n in sub.subtree} == {"/", "/sweep_0", "/sweep_1"}
 
 
@@ -253,15 +251,11 @@ def test_open_dataset_literal_group_skips_descendants(
     from rustytree._rustytree import open_datatree as _rust_open
 
     # Direct Rust call: recursive=False must return only the requested node.
-    tree = _rust_open(
-        str(multilevel_zarr_store), group="/volume_a", recursive=False
-    )
+    tree = _rust_open(str(multilevel_zarr_store), group="/volume_a", recursive=False)
     assert list(tree.keys()) == ["/volume_a"], tree.keys()
 
     # End-to-end: open_dataset must return the same Dataset as engine="zarr".
-    rusty = xr.open_dataset(
-        str(multilevel_zarr_store), engine="rustytree", group="/volume_a"
-    )
+    rusty = xr.open_dataset(str(multilevel_zarr_store), engine="rustytree", group="/volume_a")
     zarr_ds = xr.open_dataset(
         str(multilevel_zarr_store),
         engine="zarr",
@@ -277,9 +271,7 @@ def test_open_dataset_root_skips_descendants(multilevel_zarr_store: Path) -> Non
     Same parity check.
     """
     rusty = xr.open_dataset(str(multilevel_zarr_store), engine="rustytree")
-    zarr_ds = xr.open_dataset(
-        str(multilevel_zarr_store), engine="zarr", consolidated=False
-    )
+    zarr_ds = xr.open_dataset(str(multilevel_zarr_store), engine="zarr", consolidated=False)
     xr.testing.assert_identical(rusty, zarr_ds)
 
 
@@ -366,26 +358,22 @@ def test_literal_group_no_leading_slash_icechunk(
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {},                                     # neither passed
-        {"zarr_format": None},                  # explicit None
-        {"zarr_format": 3},                     # explicit v3
-        {"consolidated": None},                 # explicit None
-        {"consolidated": False},                # the v3 path users commonly pass
+        {},  # neither passed
+        {"zarr_format": None},  # explicit None
+        {"zarr_format": 3},  # explicit v3
+        {"consolidated": None},  # explicit None
+        {"consolidated": False},  # the v3 path users commonly pass
         {"zarr_format": 3, "consolidated": False},  # both together
     ],
 )
-def test_v3_compatible_kwargs_pass_through(
-    multilevel_zarr_store: Path, kwargs: dict
-) -> None:
+def test_v3_compatible_kwargs_pass_through(multilevel_zarr_store: Path, kwargs: dict) -> None:
     """xarray's stock `engine="zarr"` accepts `zarr_format` and
     `consolidated` kwargs. We accept them too for call-site
     compatibility — anything that implies Zarr v3 (or unspecified)
     must pass through silently and produce the same result as the
     no-kwarg call.
     """
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", **kwargs
-    )
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", **kwargs)
     assert isinstance(dt, xr.DataTree)
     assert sum(1 for _ in dt.subtree) > 1
 
@@ -402,17 +390,13 @@ def test_v3_compatible_kwargs_pass_through(
         ({"zarr_format": 2, "consolidated": True}, "Zarr v3 only"),
     ],
 )
-def test_v2_implying_kwargs_rejected(
-    multilevel_zarr_store: Path, kwargs: dict, match: str
-) -> None:
+def test_v2_implying_kwargs_rejected(multilevel_zarr_store: Path, kwargs: dict, match: str) -> None:
     """`zarr_format=2` and `consolidated=True` both imply the Zarr v2
     path, which rustytree does not support. The entrypoint must
     reject them with a clear `NotImplementedError` pointing the user
     at `engine="zarr"`."""
     with pytest.raises(NotImplementedError, match=match):
-        xr.open_datatree(
-            str(multilevel_zarr_store), engine="rustytree", **kwargs
-        )
+        xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", **kwargs)
 
 
 def test_v2_implying_kwargs_rejected_open_dataset(
@@ -474,15 +458,11 @@ def test_open_dataset_glob_group_treated_as_literal(
         ),
     ],
 )
-def test_glob_group_matches(
-    multilevel_zarr_store: Path, pattern: str, expected: list[str]
-) -> None:
+def test_glob_group_matches(multilevel_zarr_store: Path, pattern: str, expected: list[str]) -> None:
     """Glob filter result = matched paths + their ancestors so
     `DataTree.from_dict` sees a well-formed hierarchy. Mirrors xarray
     PR #11302's semantics."""
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group_filter=pattern
-    )
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group_filter=pattern)
     assert sorted(n.path for n in dt.subtree) == expected
 
 
@@ -503,9 +483,7 @@ def test_glob_data_round_trip(multilevel_zarr_store: Path) -> None:
     rusty = xr.open_datatree(
         str(multilevel_zarr_store), engine="rustytree", group_filter="/*/sweep_0"
     )
-    zarr_dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="zarr", consolidated=False
-    )
+    zarr_dt = xr.open_datatree(str(multilevel_zarr_store), engine="zarr", consolidated=False)
     for path in ("/volume_a/sweep_0",):
         xr.testing.assert_identical(rusty[path].dataset, zarr_dt[path].dataset)
 
@@ -585,9 +563,7 @@ def test_glob_prune_preserves_python_filter_truth(
     full = _rust_open(str(multilevel_zarr_store))
     pruned = _rust_open(str(multilevel_zarr_store), glob=pattern)
 
-    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(
-        pruned, pattern
-    ).keys()
+    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(pruned, pattern).keys()
 
 
 @pytest.mark.parametrize(
@@ -614,9 +590,7 @@ def test_glob_prune_preserves_python_filter_truth_icechunk(
     full = _rust_open(str(multilevel_icechunk_repo))
     pruned = _rust_open(str(multilevel_icechunk_repo), glob=pattern)
 
-    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(
-        pruned, pattern
-    ).keys()
+    assert _filter_by_glob(full, pattern).keys() == _filter_by_glob(pruned, pattern).keys()
 
 
 def test_open_datatree_empty_group_treated_as_root(
@@ -657,9 +631,7 @@ def test_open_datatree_literal_group_strips_trailing_slash(
 ) -> None:
     """`group="/volume_a/"` (trailing slash) should resolve the same
     as `/volume_a`. PurePosixPath strips trailing slashes."""
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/volume_a/"
-    )
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group="/volume_a/")
     paths = sorted(n.path for n in dt.subtree)
     assert paths == ["/", "/sweep_0", "/sweep_1"], paths
 
@@ -685,9 +657,7 @@ def test_glob_group_character_class(multilevel_zarr_store: Path) -> None:
 def test_glob_group_question_mark(multilevel_zarr_store: Path) -> None:
     """`PurePosixPath.match` supports `?` as single-char wildcard.
     Same Rust-prune bail-out as `[...]` — exercises the fallback."""
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_?"
-    )
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_?")
     paths = sorted(n.path for n in dt.subtree)
     assert paths == [
         "/",
@@ -724,9 +694,7 @@ def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
     `PurePosixPath.match` so a future tightening of validation
     surfaces here first.
     """
-    dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_0"
-    )
+    dt = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_0")
     paths = sorted(n.path for n in dt.subtree)
     assert "/volume_a/sweep_0" in paths, paths
 
@@ -828,12 +796,8 @@ def test_literal_group_root_is_noop(multilevel_zarr_store: Path) -> None:
         group="/",
         include_ancestor_coords=True,
     )
-    no_group = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree"
-    )
-    assert {n.path for n in with_flag.subtree} == {
-        n.path for n in no_group.subtree
-    }
+    no_group = xr.open_datatree(str(multilevel_zarr_store), engine="rustytree")
+    assert {n.path for n in with_flag.subtree} == {n.path for n in no_group.subtree}
     xr.testing.assert_identical(with_flag.dataset, no_group.dataset)
 
 
@@ -880,8 +844,8 @@ def test_literal_group_promotes_ancestor_coords_icechunk(
 @pytest.mark.parametrize(
     "group,sanity_coord",
     [
-        ("/volume_a", "x"),                   # depth 1 → 1 ancestor (`/`)
-        ("/volume_a/sweep_0", "x"),           # depth 2 → 2 ancestors
+        ("/volume_a", "x"),  # depth 1 → 1 ancestor (`/`)
+        ("/volume_a/sweep_0", "x"),  # depth 2 → 2 ancestors
     ],
 )
 def test_icechunk_session_serialised_once_for_ancestor_merge(
@@ -921,9 +885,7 @@ def test_icechunk_session_serialised_once_for_ancestor_merge(
     )
     # Sanity: the ancestor merge fired.
     assert sanity_coord in dt.dataset.coords
-    assert calls == 1, (
-        f"as_bytes() called {calls} times for group={group!r}; expected 1."
-    )
+    assert calls == 1, f"as_bytes() called {calls} times for group={group!r}; expected 1."
 
 
 def test_subtree_via_group_kwarg_default_unchanged_paths(

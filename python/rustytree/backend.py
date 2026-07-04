@@ -339,7 +339,7 @@ def _reroot(groups: dict[str, Dataset], root: str) -> dict[str, Dataset]:
         if path == root:
             out[ROOT] = ds
         elif path.startswith(prefix):
-            out[ROOT + path[len(prefix):]] = ds
+            out[ROOT + path[len(prefix) :]] = ds
     return out
 
 
@@ -514,9 +514,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
             # the user-visible behaviour of `open_dataset`, which already
             # raises). `group_filter` is exempt — an empty match is valid
             # for it per xarray PR #11302's semantics.
-            raise KeyError(
-                f"rustytree.open_datatree: group {group!r} not found in store"
-            )
+            raise KeyError(f"rustytree.open_datatree: group {group!r} not found in store")
 
         groups: dict[str, Dataset] = {
             path: _node_to_dataset(
@@ -566,9 +564,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
                 )
                 for ancestor in PurePosixPath(group).parents
             ]
-            groups[ROOT] = merge(
-                [groups[ROOT], *ancestor_dses], compat="override"
-            )
+            groups[ROOT] = merge([groups[ROOT], *ancestor_dses], compat="override")
         return datatree_from_dict_with_io_cleanup(groups)
 
     def open_dataset(
@@ -631,9 +627,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # keyed by the absolute path of the requested group.
         target_path = group if (group and group != ROOT) else ROOT
         if target_path not in tree:
-            raise KeyError(
-                f"rustytree.open_dataset: group {target_path!r} not found in store"
-            )
+            raise KeyError(f"rustytree.open_dataset: group {target_path!r} not found in store")
         return _node_to_dataset(
             tree[target_path],
             mask_and_scale=mask_and_scale,

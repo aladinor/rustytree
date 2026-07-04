@@ -66,32 +66,36 @@ as in (a). rustytree does **not** auto-detect remote icechunk URLs —
 the user controls the credentials, branch, and cache config via
 icechunk's own API.
 
-## `group=` patterns
+## `group=` and `group_filter=`
 
-`group=` accepts a literal path, a glob pattern, or `None` (root).
+`group=` selects an exact path (re-roots the tree) or `None` (root).
+`group_filter=` applies a glob pattern across the whole hierarchy. The
+two are **mutually exclusive** — passing both raises `ValueError`.
 
 ```python
 # Literal subtree — Rust skips walking siblings/descendants outside
-# this path. Leading slash is optional (we normalise).
+# this path. Leading slash is optional (we normalise). `group=` is an
+# exact path: a name that literally contains *, ?, or [ is matched
+# verbatim, not as a glob.
 dt = xr.open_datatree(session.store, engine="rustytree",
                       group="/VCP-12")
 
-# Glob (xarray PR #11302 semantics, via PurePosixPath.match):
+# Glob via `group_filter=` (xarray PR #11302 semantics, PurePosixPath.match):
 #   *  zero or more non-slash chars
 #   ?  one char
 #   [...]  character class
 # Matched paths plus their ancestors are kept so the result tree is
 # well-formed.
 dt = xr.open_datatree(session.store, engine="rustytree",
-                      group="/*/sweep_0")        # one sweep per VCP
+                      group_filter="/*/sweep_0")   # one sweep per VCP
 dt = xr.open_datatree(session.store, engine="rustytree",
-                      group="*/sweep_[01]")      # sweep_0 and sweep_1
+                      group_filter="*/sweep_[01]")  # sweep_0 and sweep_1
 ```
 
-`xr.open_dataset(..., group=)` accepts only **literal** paths — a
-single Dataset is the wrong return shape for a multi-match glob.
-Passing a glob to `open_dataset` raises `NotImplementedError` pointing
-at `open_datatree`.
+`xr.open_dataset` accepts only a literal `group=` — a single Dataset is
+the wrong return shape for a multi-match glob. Passing `group_filter=`
+to `open_dataset` raises `NotImplementedError` pointing at
+`open_datatree`.
 
 ## Lazy reads
 
