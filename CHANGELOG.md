@@ -119,6 +119,21 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Fixed
 
+- Unified the missing-group error type across backends ([#52], fixes #51).
+  A literal `group=` path that doesn't exist now raises `KeyError` on both
+  vanilla Zarr and icechunk stores — previously vanilla raised `RuntimeError`
+  (from the Rust walk) while icechunk raised `KeyError`, so callers couldn't
+  `except` one type. The Rust walk now maps zarrs' `GroupCreateError::MissingMetadata`
+  to `RustytreeError::NotFound` (→ `PyKeyError`); genuine storage/IO/corruption
+  errors still surface as `RuntimeError`.
+
+- `open_dataset` and `open_datatree` now validate the `group`/`group_filter`
+  pair consistently ([#52]). Passing both to `open_dataset` raises the same
+  `ValueError` (mutually exclusive) as `open_datatree` instead of a
+  `NotImplementedError`; the shared validator (renamed
+  `_check_group_filter_mutex` → `_validate_group_filter` since it also rejects
+  an empty `group_filter`) runs first on both entry points.
+
 - Docs and the `klot_demo` notebook still used the removed glob-`group=`
   form (`group="*/sweep_0"`) that [#49] turned into a literal-path lookup —
   the examples would now raise instead of filtering. Migrated `README.md`,
@@ -722,3 +737,4 @@ below.
 [#47]: https://github.com/aladinor/rustytree/pull/47
 [#49]: https://github.com/aladinor/rustytree/pull/49
 [#50]: https://github.com/aladinor/rustytree/pull/50
+[#52]: https://github.com/aladinor/rustytree/pull/52

@@ -22,7 +22,7 @@ use icechunk::session::Session;
 use tokio::sync::{RwLock, Semaphore};
 use zarrs::array::{Array, ArrayMetadata};
 use zarrs::array_subset::ArraySubset;
-use zarrs::group::{Group, GroupMetadata};
+use zarrs::group::{Group, GroupCreateError, GroupMetadata};
 use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTraits};
 
 use crate::dtype_dispatch::for_each_supported_dtype;
@@ -37,6 +37,33 @@ use crate::store::WalkSource;
 /// unconditionally during open. Tunable later if profiles say so.
 const EAGER_FETCH_MAX_ELEMENTS: u64 = 1 << 20;
 
+/// Map a `zarrs` group-open failure onto our error type.
+///
+/// A group whose metadata is simply absent (`MissingMetadata`) is "not
+/// found", not a hard error: map it to [`RustytreeError::NotFound`] (→
+/// `PyKeyError`) so vanilla Zarr stores raise the same `KeyError` as the
+/// icechunk walker (which returns empty and lets the Python presence check
+/// raise). Every other variant — storage/IO, corrupt or unsupported
+/// metadata — is a genuine failure and stays [`RustytreeError::Other`] (→
+/// `PyRuntimeError`). `ctx` is a short suffix (e.g. `" during walk"`)
+/// inserted after the path in the `Other` message.
+///
+/// This lives in one place because the `NotFound` arm is a store-parity
+/// contract shared by both vanilla open sites; duplicating it risks the two
+/// copies drifting and only one backend keeping the `KeyError` behaviour.
+/// Absent metadata means the group is genuinely gone: at the requested root
+/// it never existed; at a discovered descendant (pre-verified during
+/// enumeration) it can only mean a concurrent deletion, for which "not
+/// found" is still the right report.
+fn map_group_open_err(path: &str, ctx: &str, err: GroupCreateError) -> RustytreeError {
+    match err {
+        GroupCreateError::MissingMetadata => {
+            RustytreeError::NotFound(format!("group {path} not found in store"))
+        }
+        other => RustytreeError::Other(format!("failed to open group {path}{ctx}: {other}")),
+    }
+}
+
 /// Open a single group and capture its metadata + that of its child arrays.
 pub(crate) async fn open_single(
     store: &AsyncReadableListableStorage,
@@ -44,7 +71,7 @@ pub(crate) async fn open_single(
 ) -> Result<NodeData> {
     let group = Group::async_open(store.clone(), path)
         .await
-        .map_err(|err| RustytreeError::Other(format!("failed to open group {path}: {err}")))?;
+        .map_err(|err| map_group_open_err(path, "", err))?;
 
     let array_paths = group
         .async_child_array_paths()
@@ -455,9 +482,7 @@ fn discover_paths<'a>(
 
             let group = Group::async_open(store.clone(), &path)
                 .await
-                .map_err(|err| {
-                    RustytreeError::Other(format!("failed to open group {path} during walk: {err}"))
-                })?;
+                .map_err(|err| map_group_open_err(&path, " during walk", err))?;
 
             group.async_child_group_paths().await.map_err(|err| {
                 RustytreeError::Other(format!("failed to list child groups in {path}: {err}"))
@@ -706,7 +731,35 @@ impl_eager_element!(f64, F64);
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_path, parent_of};
+    use super::{map_group_open_err, normalize_path, parent_of};
+    use crate::error::RustytreeError;
+    use zarrs::group::GroupCreateError;
+    use zarrs_storage::StorageError;
+
+    #[test]
+    fn missing_metadata_maps_to_not_found() {
+        // The one classification this diff makes: an absent group is
+        // NotFound (→ PyKeyError), so vanilla stores match icechunk. The
+        // `ctx` suffix must not leak into the NotFound message.
+        let err = map_group_open_err("/g", " during walk", GroupCreateError::MissingMetadata);
+        assert!(matches!(err, RustytreeError::NotFound(_)));
+        assert_eq!(err.to_string(), "not found: group /g not found in store");
+    }
+
+    #[test]
+    fn other_group_errors_stay_other() {
+        // Anything that is NOT absence (storage/IO, corrupt metadata, ...)
+        // must stay Other (→ PyRuntimeError) and carry the `ctx` suffix —
+        // guards the two open sites from drifting into calling a real
+        // failure "not found".
+        let err = map_group_open_err(
+            "/g",
+            " during walk",
+            GroupCreateError::StorageError(StorageError::ReadOnly),
+        );
+        assert!(matches!(err, RustytreeError::Other(_)));
+        assert!(err.to_string().contains("during walk"));
+    }
 
     #[test]
     fn normalize_path_handles_root_and_trailing_slash() {

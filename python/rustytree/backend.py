@@ -138,14 +138,15 @@ def _build_rust_kwargs(
     return kwargs
 
 
-def _check_group_filter_mutex(group: str | None, group_filter: str | None) -> None:
-    """Validate ``group`` / ``group_filter`` are not both set, and
-    ``group_filter`` is non-empty when provided.
+def _validate_group_filter(group: str | None, group_filter: str | None) -> None:
+    """Validate the ``(group, group_filter)`` pair: they are not both set,
+    and ``group_filter`` is non-empty when provided.
 
-    Mirrors xarray PR #11302's ``_check_group_filter_mutex``: ``group``
-    selects an exact group path (re-rooting), while ``group_filter`` is a
-    glob pattern matched against every group path. The two express
-    different intents, so combining them is rejected rather than guessed.
+    Mirrors xarray PR #11302's ``_check_group_filter_mutex`` (kept under a
+    clearer name since it also does the non-empty check): ``group`` selects
+    an exact group path (re-rooting), while ``group_filter`` is a glob
+    pattern matched against every group path. The two express different
+    intents, so combining them is rejected rather than guessed.
     """
     if group is not None and group_filter is not None:
         raise ValueError(
@@ -467,7 +468,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         include_ancestor_coords: bool = True,
     ) -> DataTree:
         _check_zarr_v3_only(zarr_format, consolidated)
-        _check_group_filter_mutex(group, group_filter)
+        _validate_group_filter(group, group_filter)
         # Lazy-imported so plugin discovery (which only needs the entrypoint
         # class object) doesn't pay the cdylib load cost.
         from rustytree._rustytree import open_datatree as _rust_open
@@ -492,7 +493,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         # Python's `_filter_by_glob` is the source of truth — it runs after
         # the walk and drops any over-walked nodes the Rust prune was
         # conservative about. `group` and `group_filter` are mutually
-        # exclusive (see `_check_group_filter_mutex`).
+        # exclusive (see `_validate_group_filter`).
         group = _normalize_literal_group(group)
 
         tree = _rust_open_or_explain(
@@ -587,14 +588,17 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         consolidated: bool | None = None,
     ) -> Dataset:
         _check_zarr_v3_only(zarr_format, consolidated)
+        _validate_group_filter(group, group_filter)
         # `open_dataset` returns one Dataset, so for literal-path opens
         # (`group=None`/`"/"` or any exact path) we ask the Rust walk to
         # skip recursion past `group` — the descendants would be discarded
         # anyway. On `s3://nexrad-arco/KLOT` that drops a full-tree open
-        # (107 nodes) to a single-group open. `group_filter` (a glob) is
-        # rejected here: a multi-match pattern has no defined target for a
-        # single Dataset. Use `open_datatree(group_filter="*/sweep_0")`
-        # instead. `group` is an exact path — a value containing glob
+        # (107 nodes) to a single-group open. A non-empty `group_filter`
+        # (a glob) is rejected just below — a multi-match pattern has no
+        # defined target for a single Dataset (`_validate_group_filter`
+        # above already rejected the empty and both-set cases). Use
+        # `open_datatree(group_filter="*/sweep_0")` instead. `group` is an
+        # exact path — a value containing glob
         # metacharacters is looked up literally (matching xarray's
         # char-class-escape semantics), so it is not special-cased.
         from rustytree._rustytree import open_datatree as _rust_open

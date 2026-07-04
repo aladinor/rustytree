@@ -22,13 +22,6 @@ pub(crate) type Result<T> = std::result::Result<T, RustytreeError>;
 
 /// Top-level error type for rustytree's Rust core.
 #[derive(Debug, Error)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "variants get callers in the upcoming async hierarchy walk PR"
-    )
-)]
 pub(crate) enum RustytreeError {
     /// Underlying I/O failure (filesystem, socket, etc.).
     #[error("I/O error: {0}")]
