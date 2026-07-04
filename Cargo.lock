@@ -815,9 +815,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -4927,9 +4927,9 @@ dependencies = [
 
 [[package]]
 name = "zarrs_icechunk"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17b7abfb556f54e835a731abbe893f476741ca3b6bc907ab6d64457bd03739e8"
+checksum = "2737168a21a5d7afa973a92e6d3308da85dee10961fdcf936852e4ac347df4df"
 dependencies = [
  "async-trait",
  "futures",
