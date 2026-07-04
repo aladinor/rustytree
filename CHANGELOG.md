@@ -13,6 +13,18 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- `group_filter` keyword for `open_datatree` ([#49]). An
+  `fnmatch`-style glob matched against every group path — only matching groups
+  (plus their ancestors and the root, so the tree stays connected) are loaded.
+  Mirrors xarray PR [pydata/xarray#11302](https://github.com/pydata/xarray/pull/11302):
+  matching follows `PurePosixPath.match` (right-anchored), so
+  `group_filter="*/sweep_0"` opens the lowest sweep of every volume, and group
+  names that literally contain glob metacharacters are reachable via character-
+  class escapes (`[*]`, `[?]`, `[[]`). Mutually exclusive with `group`. The Rust
+  walk prunes non-matching subtrees up front (conservative prefix predicate);
+  Python's `_filter_by_glob` remains the source of truth. `open_dataset` rejects
+  `group_filter` (a single Dataset has no defined target for a multi-match glob).
+
 - Docs: a "Distributed compute (`dask.distributed` / Coiled)" section in
   `docs/usage.md` ([#46]) covering the requirements for a remote cluster
   (`spawn` workers, matching `rustytree` + `icechunk` in the worker environment)
@@ -65,6 +77,17 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   round-trips.
 
 ### Changed
+
+- **Breaking:** `group=` is now exact-path only and no longer auto-detects glob
+  patterns ([#49]). Previously a `group=` value containing `*`, `?`, or `[`
+  silently switched to glob filtering; that overloaded behaviour is removed in
+  favour of the explicit `group_filter=` (see Added). This aligns with the final
+  design of xarray PR [pydata/xarray#11302](https://github.com/pydata/xarray/pull/11302),
+  which rejected the ambiguous overloaded form because group names may legitimately
+  contain glob metacharacters. Migrate `open_datatree(group="*/sweep_0")` to
+  `open_datatree(group_filter="*/sweep_0")`; `group` and `group_filter` are
+  mutually exclusive (passing both raises `ValueError`). A `group=` value with
+  glob characters is now looked up as a literal path.
 
 - Docs: tidy the `notebooks/klot_demo.ipynb` demo — trim WHAT-narrating comments
   and add an `xradar` prerequisite note ([#47]). No code change.
@@ -683,3 +706,4 @@ below.
 [#44]: https://github.com/aladinor/rustytree/pull/44
 [#46]: https://github.com/aladinor/rustytree/pull/46
 [#47]: https://github.com/aladinor/rustytree/pull/47
+[#49]: https://github.com/aladinor/rustytree/pull/49
