@@ -1,0 +1,73 @@
+# Dependabot version updates. Opens PRs on a schedule; nothing auto-merges —
+# every PR is reviewed and merged by hand (including the grouped github-actions
+# one). Security updates (CVE-triggered PRs) are enabled separately at the repo
+# level, independent of this schedule.
+#
+# Deliberately NOT managed here (bumped by hand — coordinated, cross-manifest):
+#   - icechunk / typetag: FFI lockstep. The Python `icechunk` (pyproject) must
+#     share a minor with the Rust `icechunk` (`=2.1.0`) and `typetag`
+#     (`=0.2.22`) the crate links — the msgpack `Session` bytes format is
+#     coupled across the boundary, so a solo bump breaks `Session::from_bytes`
+#     (the 2.0.5→2.0.6 skew behind #46). Bump all three together manually.
+#   - ruff: pinned in pyproject AND hardcoded in ci.yml (`uvx ruff@0.15.8`),
+#     which Dependabot can't edit; a solo bump desyncs the lint gate and can
+#     churn formatting. Bump pyproject + both ci.yml literals together.
+#   - dtolnay/rust-toolchain@stable, pypa/gh-action-pypi-publish@release/v1:
+#     branch refs, not semver tags — Dependabot leaves them alone (no rule
+#     needed).
+version: 2
+
+updates:
+  # GitHub Actions — the `uses:` version pins in .github/workflows/* (exactly
+  # the manual toil of #54). One grouped PR per run.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Rust crates (Cargo.toml / Cargo.lock).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    commit-message:
+      prefix: deps
+    open-pull-requests-limit: 5
+    groups:
+      # Keep the zarrs family (zarrs, zarrs_storage, zarrs_object_store,
+      # zarrs_icechunk) moving together — they share a release cadence.
+      zarrs:
+        patterns: ["zarrs*"]
+      # pyo3 and numpy track matched 0.x minors (pyo3 0.28 ↔ numpy 0.28).
+      pyo3:
+        patterns: ["pyo3", "numpy"]
+      # Everything else: fold minor/patch into one PR; majors get their own.
+      cargo-minor:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "icechunk"  # FFI lockstep — bump by hand (see header)
+      - dependency-name: "typetag"   # FFI lockstep — bump by hand (see header)
+
+  # Python deps (pyproject.toml: project deps + the `dev` extra).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    commit-message:
+      prefix: deps
+    open-pull-requests-limit: 5
+    groups:
+      # Fold minor/patch into one PR; majors get their own.
+      python:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "icechunk"  # FFI lockstep — bump by hand (see header)
+      - dependency-name: "ruff"      # also hardcoded in ci.yml — bump by hand
