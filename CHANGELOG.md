@@ -66,6 +66,9 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- Docs: tidy the `notebooks/klot_demo.ipynb` demo — trim WHAT-narrating comments
+  and add an `xradar` prerequisite note ([#47]). No code change.
+
 - Bump the pinned `icechunk` from 2.0.5 to 2.1.0 ([#46]). rustytree links the
   `icechunk` Rust crate and round-trips sessions through
   `Session::{as,from}_bytes`, so it can only open stores whose on-disk format
@@ -679,3 +682,4 @@ below.
 [#43]: https://github.com/aladinor/rustytree/pull/43
 [#44]: https://github.com/aladinor/rustytree/pull/44
 [#46]: https://github.com/aladinor/rustytree/pull/46
+[#47]: https://github.com/aladinor/rustytree/pull/47
