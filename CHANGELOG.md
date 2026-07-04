@@ -11,6 +11,16 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Dependabot dependency automation ([#56]). A `.github/dependabot.yml` opens
+  weekly grouped version-update PRs for three ecosystems — `cargo`, `pip`
+  (pyproject), and `github-actions` — plus repo-level vulnerability alerts and
+  Dependabot security updates for CVE-triggered PRs. Nothing auto-merges; every
+  PR is reviewed by hand. `icechunk`/`typetag` (FFI lockstep) and `ruff` (also
+  pinned in `ci.yml`) are intentionally ignored and stay manual, coordinated
+  bumps.
+
 ### Changed
 
 - CI: bump GitHub Actions off the deprecated Node 20 runtime ([#55], fixes #54).
@@ -752,3 +762,4 @@ below.
 [#50]: https://github.com/aladinor/rustytree/pull/50
 [#52]: https://github.com/aladinor/rustytree/pull/52
 [#55]: https://github.com/aladinor/rustytree/pull/55
+[#56]: https://github.com/aladinor/rustytree/pull/56
