@@ -428,14 +428,32 @@ def test_v2_implying_kwargs_rejected_open_dataset(
         )
 
 
-def test_open_dataset_glob_group_rejects() -> None:
-    """Glob `group=` patterns aren't meaningful for `open_dataset`
-    (multi-match, single-Dataset return). The entrypoint should raise
+def test_open_dataset_group_filter_rejects() -> None:
+    """`group_filter` isn't meaningful for `open_dataset` (multi-match,
+    single-Dataset return). The entrypoint should raise
     NotImplementedError pointing the user at `open_datatree` rather
-    than KeyError'ing through the literal-key lookup."""
+    than attempting a walk."""
     with pytest.raises(NotImplementedError, match="open_datatree"):
         xr.open_dataset(
-            "/nonexistent",  # never reached; glob check is first
+            "/nonexistent",  # never reached; group_filter check is first
+            engine="rustytree",
+            group_filter="*/sweep_0",
+        )
+
+
+def test_open_dataset_glob_group_treated_as_literal(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`group` is now exact-path only: a value that happens to contain
+    glob metacharacters is looked up literally (matching xarray's
+    char-class-escape semantics), so an absent path raises — NOT the
+    NotImplementedError the old glob-in-`group` behaviour produced, and
+    NOT a silently-globbed result. (Vanilla stores surface the missing
+    literal group as a RuntimeError from the Rust walk; the icechunk
+    fast-path raises KeyError from the post-walk presence check.)"""
+    with pytest.raises((KeyError, RuntimeError)):
+        xr.open_dataset(
+            str(multilevel_zarr_store),
             engine="rustytree",
             group="*/sweep_0",
         )
@@ -463,7 +481,7 @@ def test_glob_group_matches(
     `DataTree.from_dict` sees a well-formed hierarchy. Mirrors xarray
     PR #11302's semantics."""
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group=pattern
+        str(multilevel_zarr_store), engine="rustytree", group_filter=pattern
     )
     assert sorted(n.path for n in dt.subtree) == expected
 
@@ -472,7 +490,7 @@ def test_glob_group_no_matches_returns_empty(multilevel_zarr_store: Path) -> Non
     """A glob with no matches returns a DataTree with just an empty
     root node. Mirrors xarray PR #11302 behaviour."""
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_99"
+        str(multilevel_zarr_store), engine="rustytree", group_filter="/*/sweep_99"
     )
     paths = [n.path for n in dt.subtree]
     assert paths == ["/"], paths
@@ -483,7 +501,7 @@ def test_glob_data_round_trip(multilevel_zarr_store: Path) -> None:
     """Filtered tree's data should match the stock zarr engine's view
     of the same paths — confirms we're not mangling node contents."""
     rusty = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="/*/sweep_0"
+        str(multilevel_zarr_store), engine="rustytree", group_filter="/*/sweep_0"
     )
     zarr_dt = xr.open_datatree(
         str(multilevel_zarr_store), engine="zarr", consolidated=False
@@ -499,7 +517,7 @@ def test_glob_group_icechunk(multilevel_icechunk_repo: Path) -> None:
     glob optimisation can't regress silently.
     """
     dt = xr.open_datatree(
-        str(multilevel_icechunk_repo), engine="rustytree", group="/*/sweep_0"
+        str(multilevel_icechunk_repo), engine="rustytree", group_filter="/*/sweep_0"
     )
     paths = sorted(n.path for n in dt.subtree)
     assert paths == ["/", "/volume_a", "/volume_a/sweep_0"], paths
@@ -653,7 +671,7 @@ def test_glob_group_character_class(multilevel_zarr_store: Path) -> None:
     (the Python filter remains authoritative), so this test exercises
     the fallback path."""
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_[01]"
+        str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_[01]"
     )
     paths = sorted(n.path for n in dt.subtree)
     assert paths == [
@@ -668,7 +686,7 @@ def test_glob_group_question_mark(multilevel_zarr_store: Path) -> None:
     """`PurePosixPath.match` supports `?` as single-char wildcard.
     Same Rust-prune bail-out as `[...]` — exercises the fallback."""
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_?"
+        str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_?"
     )
     paths = sorted(n.path for n in dt.subtree)
     assert paths == [
@@ -707,10 +725,53 @@ def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
     surfaces here first.
     """
     dt = xr.open_datatree(
-        str(multilevel_zarr_store), engine="rustytree", group="*/sweep_0"
+        str(multilevel_zarr_store), engine="rustytree", group_filter="*/sweep_0"
     )
     paths = sorted(n.path for n in dt.subtree)
     assert "/volume_a/sweep_0" in paths, paths
+
+
+def test_group_and_group_filter_mutually_exclusive(
+    multilevel_zarr_store: Path,
+) -> None:
+    """`group` (exact path) and `group_filter` (glob) express different
+    intents, so combining them is a ValueError rather than a guess.
+    Mirrors xarray PR #11302's `_check_group_filter_mutex`."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        xr.open_datatree(
+            str(multilevel_zarr_store),
+            engine="rustytree",
+            group="/volume_a",
+            group_filter="*/sweep_0",
+        )
+
+
+def test_empty_group_filter_rejected(multilevel_zarr_store: Path) -> None:
+    """An empty `group_filter` is almost certainly a mistake (it would
+    match nothing useful); reject it explicitly. `group=""` stays valid
+    and means root."""
+    with pytest.raises(ValueError, match="non-empty glob pattern"):
+        xr.open_datatree(
+            str(multilevel_zarr_store),
+            engine="rustytree",
+            group_filter="",
+        )
+
+
+def test_open_datatree_glob_group_treated_as_literal(
+    multilevel_zarr_store: Path,
+) -> None:
+    """With glob-detection removed from `group`, a glob-looking value is
+    an exact path. `/*/sweep_0` is not a real node, so it raises instead
+    of silently globbing — proving the old ambiguity is gone. (Vanilla
+    surfaces the missing literal group as a RuntimeError from the Rust
+    walk; icechunk raises KeyError from the post-walk presence check.)"""
+    with pytest.raises((KeyError, RuntimeError)):
+        xr.open_datatree(
+            str(multilevel_zarr_store),
+            engine="rustytree",
+            group="/*/sweep_0",
+        )
 
 
 # ---- include_ancestor_coords (literal-group ancestor merge) ----
@@ -784,13 +845,13 @@ def test_glob_group_flag_is_noop(multilevel_zarr_store: Path) -> None:
     on = xr.open_datatree(
         str(multilevel_zarr_store),
         engine="rustytree",
-        group="*/sweep_0",
+        group_filter="*/sweep_0",
         include_ancestor_coords=True,
     )
     off = xr.open_datatree(
         str(multilevel_zarr_store),
         engine="rustytree",
-        group="*/sweep_0",
+        group_filter="*/sweep_0",
         include_ancestor_coords=False,
     )
     assert {n.path for n in on.subtree} == {n.path for n in off.subtree}

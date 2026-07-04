@@ -24,7 +24,6 @@ by:
 from __future__ import annotations
 
 import contextlib
-import re
 from collections.abc import Iterable, Iterator
 from pathlib import PurePosixPath
 from typing import Any
@@ -139,12 +138,23 @@ def _build_rust_kwargs(
     return kwargs
 
 
-# Mirror xarray PR #11302's `_is_glob_pattern`: any of `*`, `?`, `[`
-# triggers glob handling. Plain literal paths take the non-recursive
-# fast-path in `open_dataset`. Glob support in `open_dataset` raises
-# until Phase 8 — `open_dataset` returns a single Dataset, so a
-# multi-match glob has no defined target.
-_GLOB_CHARS = re.compile(r"[*?\[]")
+def _check_group_filter_mutex(group: str | None, group_filter: str | None) -> None:
+    """Validate ``group`` / ``group_filter`` are not both set, and
+    ``group_filter`` is non-empty when provided.
+
+    Mirrors xarray PR #11302's ``_check_group_filter_mutex``: ``group``
+    selects an exact group path (re-rooting), while ``group_filter`` is a
+    glob pattern matched against every group path. The two express
+    different intents, so combining them is rejected rather than guessed.
+    """
+    if group is not None and group_filter is not None:
+        raise ValueError(
+            "group and group_filter are mutually exclusive: group selects an "
+            "exact group path while group_filter is a glob pattern over all "
+            "group paths."
+        )
+    if group_filter == "":
+        raise ValueError("group_filter must be a non-empty glob pattern")
 
 
 def _check_zarr_v3_only(zarr_format: int | None, consolidated: bool | None) -> None:
@@ -185,11 +195,11 @@ def _check_zarr_v3_only(zarr_format: int | None, consolidated: bool | None) -> N
         )
 
 
-def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
+def _normalize_literal_group(group: str | None) -> str | None:
     """Normalise a literal group path to absolute, canonical form.
-    Globs are left alone: ``PurePosixPath.match`` treats relative
-    patterns as suffix matches, absolute ones as full-path matches —
-    meaningfully different.
+
+    ``group`` is always an exact path (globs travel through
+    ``group_filter``), so there is no pattern to preserve here.
 
     Rules:
       - ``None`` → ``None`` (no group selection).
@@ -201,7 +211,7 @@ def _normalize_literal_group(group: str | None, is_glob: bool) -> str | None:
         emit canonical paths; without normalisation, a user-supplied
         ``/foo//bar`` or ``/foo/`` would miss the lookup.
     """
-    if is_glob or group is None:
+    if group is None:
         return group
     if group == "":
         return ROOT
@@ -419,6 +429,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         "filename_or_obj",
         "drop_variables",
         "group",
+        "group_filter",
         "branch",
         "storage_options",
         "max_concurrency",
@@ -441,6 +452,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         *,
         drop_variables: str | Iterable[str] | None = None,
         group: str | None = None,
+        group_filter: str | None = None,
         branch: str | None = None,
         storage_options: dict[str, Any] | None = None,
         max_concurrency: int | None = None,
@@ -455,6 +467,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         include_ancestor_coords: bool = True,
     ) -> DataTree:
         _check_zarr_v3_only(zarr_format, consolidated)
+        _check_group_filter_mutex(group, group_filter)
         # Lazy-imported so plugin discovery (which only needs the entrypoint
         # class object) doesn't pay the cdylib load cost.
         from rustytree._rustytree import open_datatree as _rust_open
@@ -472,34 +485,35 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         else:
             storage_options_arg = storage_options
 
-        # Glob `group=` (xarray PR #11302 semantics): the Rust walk
-        # accepts the pattern as a conservative prefix predicate to
-        # prune subtrees that can't match (Phase 8 / part 2). Python's
-        # `_filter_by_glob` is the source of truth — it runs after
-        # the walk and drops any over-walked nodes the Rust prune
-        # was conservative about.
-        is_glob = group is not None and bool(_GLOB_CHARS.search(group))
-        group = _normalize_literal_group(group, is_glob)
+        # `group_filter` (xarray PR #11302 semantics): a glob pattern
+        # matched against every group path, distinct from `group`'s
+        # exact-path re-rooting. The Rust walk accepts the pattern as a
+        # conservative prefix predicate to prune subtrees that can't match.
+        # Python's `_filter_by_glob` is the source of truth — it runs after
+        # the walk and drops any over-walked nodes the Rust prune was
+        # conservative about. `group` and `group_filter` are mutually
+        # exclusive (see `_check_group_filter_mutex`).
+        group = _normalize_literal_group(group)
 
         tree = _rust_open_or_explain(
             _rust_open,
             source,
             **_build_rust_kwargs(
-                group=None if is_glob else group,
+                group=group,
                 branch=branch,
                 storage_options=storage_options_arg,
                 max_concurrency=max_concurrency,
-                glob=group if is_glob else None,
+                glob=group_filter,
             ),
         )
 
-        if is_glob:
-            tree = _filter_by_glob(tree, group)
+        if group_filter is not None:
+            tree = _filter_by_glob(tree, group_filter)
         elif group and group != ROOT and group not in tree:
             # Missing-literal-path: silent-empty is misleading (matches
             # the user-visible behaviour of `open_dataset`, which already
-            # raises). Globs are exempt — empty match is valid for them
-            # per xarray PR #11302's semantics.
+            # raises). `group_filter` is exempt — an empty match is valid
+            # for it per xarray PR #11302's semantics.
             raise KeyError(
                 f"rustytree.open_datatree: group {group!r} not found in store"
             )
@@ -517,10 +531,12 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
             )
             for path, node in tree.items()
         }
-        # Glob results stay rooted at "/" — matched paths may span
-        # ancestors with no common non-root prefix; only literal
-        # subtree paths get rerooted and the ancestor merge.
-        is_literal_subtree = bool(group) and group != ROOT and not is_glob
+        # `group_filter` results stay rooted at "/" — matched paths may
+        # span ancestors with no common non-root prefix; only a literal
+        # `group` subtree gets rerooted and the ancestor merge. (`group`
+        # and `group_filter` are mutually exclusive, so a truthy `group`
+        # already implies no filter — no need to re-test it here.)
+        is_literal_subtree = bool(group) and group != ROOT
         if is_literal_subtree:
             groups = _reroot(groups, group)
         # Promote ancestor groups onto the new root so a literal subtree
@@ -561,6 +577,7 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
         *,
         drop_variables: str | Iterable[str] | None = None,
         group: str | None = None,
+        group_filter: str | None = None,
         branch: str | None = None,
         storage_options: dict[str, Any] | None = None,
         max_concurrency: int | None = None,
@@ -575,22 +592,25 @@ class RustytreeBackendEntrypoint(BackendEntrypoint):
     ) -> Dataset:
         _check_zarr_v3_only(zarr_format, consolidated)
         # `open_dataset` returns one Dataset, so for literal-path opens
-        # (`group=None`/`"/"` or any non-glob path) we ask the Rust
-        # walk to skip recursion past `group` — the descendants would
-        # be discarded anyway. On `s3://nexrad-arco/KLOT` that drops a
-        # full-tree open (107 nodes) to a single-group open. Glob
-        # patterns are rejected here: `open_dataset` returns one
-        # Dataset, so a multi-match glob has no defined target. Use
-        # `open_datatree(group="*/sweep_0")` (Phase 8) instead.
+        # (`group=None`/`"/"` or any exact path) we ask the Rust walk to
+        # skip recursion past `group` — the descendants would be discarded
+        # anyway. On `s3://nexrad-arco/KLOT` that drops a full-tree open
+        # (107 nodes) to a single-group open. `group_filter` (a glob) is
+        # rejected here: a multi-match pattern has no defined target for a
+        # single Dataset. Use `open_datatree(group_filter="*/sweep_0")`
+        # instead. `group` is an exact path — a value containing glob
+        # metacharacters is looked up literally (matching xarray's
+        # char-class-escape semantics), so it is not special-cased.
         from rustytree._rustytree import open_datatree as _rust_open
 
-        if group is not None and _GLOB_CHARS.search(group):
+        if group_filter is not None:
             raise NotImplementedError(
-                f"rustytree.open_dataset: glob `group=` patterns ({group!r}) "
-                "are not supported because `open_dataset` returns a single "
-                "Dataset. Use `xr.open_datatree(group=...)` instead."
+                f"rustytree.open_dataset: group_filter ({group_filter!r}) is "
+                "not supported because `open_dataset` returns a single "
+                "Dataset, so a multi-match glob has no defined target. Use "
+                "`xr.open_datatree(group_filter=...)` instead."
             )
-        group = _normalize_literal_group(group, is_glob=False)
+        group = _normalize_literal_group(group)
 
         source = _to_rust_source(filename_or_obj)
         storage_options_arg = None if isinstance(source, bytes) else storage_options
