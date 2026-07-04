@@ -11,6 +11,15 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- CI: bump GitHub Actions off the deprecated Node 20 runtime ([#55], fixes #54).
+  `actions/checkout` v4 → v5, `actions/setup-python` v5 → v6,
+  `actions/upload-artifact` v4 → v6, `actions/download-artifact` v4 → v7 — the
+  lowest major of each that runs on Node 24 (verified via each tag's
+  `runs.using`; the artifact actions only moved to Node 24 at v6/v7, so a naïve
+  bump to v5 would still have been Node 20). No workflow behaviour change.
+
 ## [0.3.0] - 2026-07-04
 
 ### Added
@@ -742,3 +751,4 @@ below.
 [#49]: https://github.com/aladinor/rustytree/pull/49
 [#50]: https://github.com/aladinor/rustytree/pull/50
 [#52]: https://github.com/aladinor/rustytree/pull/52
+[#55]: https://github.com/aladinor/rustytree/pull/55
