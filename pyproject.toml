@@ -45,7 +45,11 @@ dev = [
     # Python and Rust icechunk must share a minor or `Session::from_bytes` fails
     # to recognise the store (the 2.0.5-vs-2.0.6 skew that motivated this bump).
     "icechunk>=2.1.0,<2.2",
-    "ruff>=0.5.0",
+    # Pin ruff's minor so local dev and the CI `lint` job agree on formatting
+    # rules — ruff can change its stable formatter across minors, which would
+    # otherwise make `ruff format --check` pass locally but fail in CI (or vice
+    # versa) purely on a version skew.
+    "ruff>=0.15.8,<0.16",
     # Exercises the issue-#44 regression: computing rustytree arrays under a
     # real dask.distributed LocalCluster (see the `distributed` marker).
     "dask[distributed]>=2024.1",

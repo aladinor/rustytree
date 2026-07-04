@@ -15,6 +15,20 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # Python lint + format gate. Fast and dependency-free (ruff is a standalone
+  # binary; no extension build needed), so it runs in parallel with the cargo
+  # and pytest jobs and fails fast on style drift. The pinned version must
+  # match the `ruff` pin in pyproject's `dev` extra so local `ruff format`
+  # and this check agree.
+  lint:
+    name: ruff (lint + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uvx 'ruff@0.15.8' check .
+      - run: uvx 'ruff@0.15.8' format --check .
+
   # Cargo gates run once on stable Rust. `cargo test` links libpython (see the
   # test step), so Python is set up here too.
   cargo:
@@ -71,8 +85,9 @@ jobs:
         # Install the [dev] extras directly rather than `pip install -e ".[dev]"`,
         # which would re-trigger a full cdylib rebuild on top of maturin develop
         # below (we'd build the wheel twice — saves ~80s per matrix cell).
-        # Keep this list in sync with the `dev` extra in pyproject.toml.
-        run: uv pip install --python .venv/bin/python pytest pytest-cov 'zarr>=3.0' 'icechunk>=2.1.0,<2.2' 'dask[distributed]>=2024.1' ruff
+        # These are the deps pytest needs; ruff is not among them — linting runs
+        # in the dedicated `lint` job above.
+        run: uv pip install --python .venv/bin/python pytest pytest-cov 'zarr>=3.0' 'icechunk>=2.1.0,<2.2' 'dask[distributed]>=2024.1'
       - name: Build extension (maturin develop)
         run: .venv/bin/maturin develop
       - name: pytest

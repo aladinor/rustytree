@@ -75,8 +75,6 @@ def test_numcodecs_zlib_decodes_to_written_values(
     bit-for-bit through the shuffle + zlib pipeline."""
     path, values = numcodecs_zlib_store
     # mask_and_scale=False: compare the raw decoded integers directly.
-    dt = xr.open_datatree(
-        str(path), engine="rustytree", mask_and_scale=False, decode_times=False
-    )
+    dt = xr.open_datatree(str(path), engine="rustytree", mask_and_scale=False, decode_times=False)
     decoded = dt["field"].values
     np.testing.assert_array_equal(decoded, values)

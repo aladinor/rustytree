@@ -62,9 +62,9 @@ def _write_multilevel_layout(root: zarr.Group) -> None:
 
     volume_a = root.create_group("volume_a")
     volume_a.attrs["id"] = "A"
-    volume_a.create_array(
-        "temp", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",)
-    )[:] = np.arange(4, dtype=np.float64)
+    volume_a.create_array("temp", shape=(4,), dtype="float64", chunks=(4,), dimension_names=("x",))[
+        :
+    ] = np.arange(4, dtype=np.float64)
 
     for i, angle in enumerate([0.5, 1.5]):
         sweep = volume_a.create_group(f"sweep_{i}")
