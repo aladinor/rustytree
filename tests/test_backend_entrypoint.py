@@ -425,17 +425,45 @@ def test_open_dataset_group_filter_rejects() -> None:
         )
 
 
+def test_open_dataset_group_and_group_filter_mutually_exclusive() -> None:
+    """Passing both `group` and `group_filter` to `open_dataset` raises the
+    same `ValueError` (mutex) as `open_datatree` — the shared
+    `_validate_group_filter` runs before the `group_filter`-unsupported
+    `NotImplementedError`, so the two entry points agree on this bad-arg
+    case (#51)."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        xr.open_dataset(
+            "/nonexistent",  # never reached; validation is first
+            engine="rustytree",
+            group="/volume_a",
+            group_filter="*/sweep_0",
+        )
+
+
+def test_open_dataset_empty_group_filter_rejected() -> None:
+    """An empty `group_filter` is rejected the same way on `open_dataset`
+    as on `open_datatree` — the shared `_validate_group_filter` runs before
+    the `group_filter`-unsupported check, so `""` yields the precise
+    non-empty `ValueError`, not the generic `NotImplementedError` (#51)."""
+    with pytest.raises(ValueError, match="non-empty glob pattern"):
+        xr.open_dataset(
+            "/nonexistent",  # never reached; validation is first
+            engine="rustytree",
+            group_filter="",
+        )
+
+
 def test_open_dataset_glob_group_treated_as_literal(
     multilevel_zarr_store: Path,
 ) -> None:
     """`group` is now exact-path only: a value that happens to contain
     glob metacharacters is looked up literally (matching xarray's
-    char-class-escape semantics), so an absent path raises — NOT the
-    NotImplementedError the old glob-in-`group` behaviour produced, and
-    NOT a silently-globbed result. (Vanilla stores surface the missing
-    literal group as a RuntimeError from the Rust walk; the icechunk
-    fast-path raises KeyError from the post-walk presence check.)"""
-    with pytest.raises((KeyError, RuntimeError)):
+    char-class-escape semantics), so an absent path raises `KeyError` —
+    NOT the NotImplementedError the old glob-in-`group` behaviour
+    produced, and NOT a silently-globbed result. Both vanilla and
+    icechunk raise `KeyError` for a missing literal group (unified in
+    #51)."""
+    with pytest.raises(KeyError, match="not found"):
         xr.open_dataset(
             str(multilevel_zarr_store),
             engine="rustytree",
@@ -687,6 +715,39 @@ def test_open_datatree_missing_literal_group_raises_icechunk(
         )
 
 
+def test_open_datatree_missing_literal_group_raises_vanilla(
+    multilevel_zarr_store: Path,
+) -> None:
+    """Sibling of the icechunk test above, for the vanilla path — the two
+    must agree. Vanilla's `Group::async_open` fails with zarrs'
+    `MissingMetadata` for an absent group; #51 maps that to `KeyError`
+    (via `RustytreeError::NotFound`) so callers can `except KeyError`
+    regardless of backend, instead of the old vanilla-only `RuntimeError`.
+    """
+    with pytest.raises(KeyError, match="not found"):
+        xr.open_datatree(
+            str(multilevel_zarr_store),
+            engine="rustytree",
+            group="/nonexistent/path",
+        )
+
+
+def test_open_dataset_missing_literal_group_raises_icechunk(
+    multilevel_icechunk_repo: Path,
+) -> None:
+    """Completes the backend × entry-point matrix for missing groups. The
+    icechunk `open_dataset` path never errors in Rust (the snapshot walker
+    returns empty); the `KeyError` comes solely from `open_dataset`'s
+    post-walk presence check. Its vanilla counterpart raises from the Rust
+    walk instead — both must surface `KeyError` (#51)."""
+    with pytest.raises(KeyError, match="not found"):
+        xr.open_dataset(
+            str(multilevel_icechunk_repo),
+            engine="rustytree",
+            group="/nonexistent/path",
+        )
+
+
 def test_glob_group_relative_pattern(multilevel_zarr_store: Path) -> None:
     """A relative pattern (no leading `/`) matches any path suffix.
     `*/sweep_0` should match `/volume_a/sweep_0` (the leading-slash
@@ -730,11 +791,11 @@ def test_open_datatree_glob_group_treated_as_literal(
     multilevel_zarr_store: Path,
 ) -> None:
     """With glob-detection removed from `group`, a glob-looking value is
-    an exact path. `/*/sweep_0` is not a real node, so it raises instead
-    of silently globbing — proving the old ambiguity is gone. (Vanilla
-    surfaces the missing literal group as a RuntimeError from the Rust
-    walk; icechunk raises KeyError from the post-walk presence check.)"""
-    with pytest.raises((KeyError, RuntimeError)):
+    an exact path. `/*/sweep_0` is not a real node, so it raises `KeyError`
+    instead of silently globbing — proving the old ambiguity is gone.
+    Both vanilla and icechunk raise `KeyError` for a missing literal
+    group (unified in #51)."""
+    with pytest.raises(KeyError, match="not found"):
         xr.open_datatree(
             str(multilevel_zarr_store),
             engine="rustytree",
