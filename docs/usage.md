@@ -102,6 +102,59 @@ exception: 1-D self-named dim coords are **eagerly** fetched during
 the walk (the eager-fetch step) so xarray's `_maybe_create_default_indexes`
 doesn't fan out N serial chunk reads on open.
 
+## Distributed compute (`dask.distributed` / Coiled)
+
+rustytree-backed arrays are picklable, so they compute under a
+`dask.distributed` cluster (`LocalCluster`, Coiled, …), not only the threaded
+scheduler. When distributed serialises the task graph, each lazy chunk carries
+the icechunk **session** it was opened from and re-opens the store on the worker.
+rustytree stores icechunk's own `Session` bytes verbatim and adds **no**
+credential handling of its own.
+
+Two requirements for a remote cluster:
+
+- **Workers must use the `spawn` start-method** (the `dask.distributed` default).
+  rustytree's tokio runtime is not fork-safe.
+- **Workers need `rustytree` and a matching `icechunk` installed** — the same
+  icechunk minor as the client (currently 2.1; the session-bytes format is
+  version-coupled). On Coiled, put both in the cluster's software environment.
+
+### Credentials — don't ship secrets to workers
+
+The pickled task graph is sent to every worker (and through the scheduler), so
+**how you supply credentials decides whether a secret travels with it.**
+rustytree carries icechunk's credential *mode* exactly as icechunk encodes it,
+so the guidance is icechunk's own:
+
+| Credentials | Secret in the task graph? | Remote cluster? |
+|---|---|---|
+| `s3_from_env_credentials()` / `from_env=True` | no — each worker reads its own env / instance role | ✅ recommended |
+| `s3_refreshable_credentials(fn)` | no — the picklable `fn` runs on each worker | ✅ |
+| `s3_anonymous_credentials()` | no — public store | ✅ |
+| `s3_static_credentials(key, secret)` | **yes — the secret is embedded** | ❌ avoid |
+
+For a remote cluster, open the session with `from_env` (and make sure the
+workers have credentials — forwarded env vars, an instance role, or a
+refreshable callback), **not** static keys:
+
+```python
+import icechunk
+import xarray as xr
+
+# `from_env` => workers authenticate themselves; no secret is serialized.
+storage = icechunk.s3_storage(bucket="my-bucket", prefix="",
+                              region="us-east-1", from_env=True)
+session = icechunk.Repository.open(storage).readonly_session("main")
+dt = xr.open_datatree(session.store, engine="rustytree", chunks={})
+
+# On a Coiled / distributed cluster this ships NO secret in the graph:
+dt["VOL_A/sweep_0"].DBZH.mean().compute()
+```
+
+Static credentials still work (the secret is embedded in the graph, exactly as
+icechunk does) — fine for a `LocalCluster` on your own machine, but avoid them on
+a remote cluster.
+
 ## Errors
 
 | Condition | Error |

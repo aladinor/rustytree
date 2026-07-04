@@ -13,6 +13,15 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Added
 
+- Docs: a "Distributed compute (`dask.distributed` / Coiled)" section in
+  `docs/usage.md` ([#46]) covering the requirements for a remote cluster
+  (`spawn` workers, matching `rustytree` + `icechunk` in the worker environment)
+  and — mirroring icechunk's own guidance — how to avoid shipping secrets to
+  workers: use `from_env` / `refreshable` / `anonymous` credentials (secret-free
+  in the task graph) rather than `static` keys. Verified end-to-end that a
+  `from_env` session opened via rustytree pickles with no secret in the graph and
+  still computes on a distributed cluster.
+
 - Picklable array handles for `dask.distributed` ([#44], fixes #44).
   DataArrays opened with `engine="rustytree"` could not be computed under a
   `dask.distributed` cluster — `.compute()` failed while distributed pickled
@@ -54,6 +63,25 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   GOES-16 `CMI_C01` slice. New non-gated `tests/test_codecs.py` writes
   the shuffle+zlib pipeline to a local store and checks the decode
   round-trips.
+
+### Changed
+
+- Bump the pinned `icechunk` from 2.0.5 to 2.1.0 ([#46]). rustytree links the
+  `icechunk` Rust crate and round-trips sessions through
+  `Session::{as,from}_bytes`, so it can only open stores whose on-disk format
+  matches its pinned icechunk — 2.0.5 could not open repositories written by
+  icechunk 2.0.6+, failing in `Repository::open` with "the repository doesn't
+  exist" even though the store was present and the credentials valid. Bumping to
+  2.1.0 restores access to current icechunk stores; `typetag` moves to `=0.2.22`
+  to keep sharing icechunk's `inventory` credential-fetcher registry (the #41
+  `py_credentials` shim). The `dev` extra and CI now require
+  `icechunk>=2.1.0,<2.2` so the Python and Rust icechunk versions share a minor —
+  the msgpack session-bytes format is coupled across the FFI boundary, and a skew
+  is exactly what produced the "repository doesn't exist" failure. No rustytree
+  source changes were needed (the API surface is unchanged). Verified end-to-end
+  against a real credentialed AWS S3 icechunk 2.0.6 store: parity with
+  `engine="zarr"`, pickle round-trip, and a distributed `LocalCluster` compute
+  whose workers reopen the store from the pickled session.
 
 ### Fixed
 
@@ -650,3 +678,4 @@ below.
 [#41]: https://github.com/aladinor/rustytree/pull/41
 [#43]: https://github.com/aladinor/rustytree/pull/43
 [#44]: https://github.com/aladinor/rustytree/pull/44
+[#46]: https://github.com/aladinor/rustytree/pull/46

@@ -33,10 +33,11 @@ thiserror = "2"
 # Credential-fetcher shim (`src/py_credentials.rs`): re-register icechunk-python's
 # `PythonCredentialsFetcher` typetag inside our cdylib so `Session::from_bytes`
 # can deserialize arraylake/Earthmover sessions. `typetag` MUST match the version
-# icechunk links (`=0.2.21`) so the `inventory` registry is shared and our impls
-# are found by icechunk's `Session` deserializer; a skew silently splits the
-# registry. `chrono` unifies to icechunk's 0.4.x so `DateTime<Utc>` types match.
-typetag = "=0.2.21"
+# icechunk links (`=0.2.22` for icechunk 2.1.x) so the `inventory` registry is
+# shared and our impls are found by icechunk's `Session` deserializer; a skew
+# silently splits the registry. `chrono` unifies to icechunk's 0.4.x so
+# `DateTime<Utc>` types match.
+typetag = "=0.2.22"
 async-trait = "0.1"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -66,7 +67,7 @@ serde_json = "1"
 # icechunk `Session` as `AsyncReadableListableStorageTraits` so the walk
 # code stays polymorphic: the same `open_single` runs against either an
 # icechunk session or a vanilla object_store-backed store.
-icechunk = "=2.0.5"
+icechunk = "=2.1.0"
 zarrs_icechunk = "0.5"
 
 # msgpack codec — the same one icechunk's `Session::{as,from}_bytes` use. We use
