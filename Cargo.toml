@@ -24,8 +24,8 @@ extension-module = ["pyo3/extension-module"]
 # `chrono` feature lets us extract credential `expires_after` (a Python
 # `datetime`) straight into `DateTime<Utc>` in the credential-fetcher shim
 # (`src/py_credentials.rs`).
-pyo3 = { version = "0.28", features = ["chrono"] }
-numpy = "0.28"
+pyo3 = { version = "0.29", features = ["chrono"] }
+numpy = "0.29"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 futures = "0.3"
 thiserror = "2"

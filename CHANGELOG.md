@@ -30,6 +30,14 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   `runs.using`; the artifact actions only moved to Node 24 at v6/v7, so a naïve
   bump to v5 would still have been Node 20). No workflow behaviour change.
 
+### Security
+
+- Bump `pyo3` and `numpy` 0.28 → 0.29 ([#61]) to fix a **high**-severity
+  out-of-bounds read in PyO3's `PyIterator` `nth`/`nth_back` (RUSTSEC/GHSA)
+  plus a medium-severity missing `Sync` bound on `PyCFunction::new_closure`.
+  A clean bump — no source changes; the pyo3/numpy majors move in lockstep.
+  (Surfaced by the newly-enabled Dependabot security alerts.)
+
 ## [0.3.0] - 2026-07-04
 
 ### Added
@@ -763,3 +771,4 @@ below.
 [#52]: https://github.com/aladinor/rustytree/pull/52
 [#55]: https://github.com/aladinor/rustytree/pull/55
 [#56]: https://github.com/aladinor/rustytree/pull/56
+[#61]: https://github.com/aladinor/rustytree/pull/61
