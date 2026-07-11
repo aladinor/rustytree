@@ -5002,9 +5002,9 @@ dependencies = [
 
 [[package]]
 name = "zarrs_storage"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d098796d2ed4cf94896569615101e0432e870a7665396da5cc32300fb68f7c1"
+checksum = "cf372205f5ab996c7e48ead8c68188c0bc3aaf205f3aa3afe8d7eb8db178a592"
 dependencies = [
  "async-trait",
  "auto_impl",
