@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from rustytree._rustytree import open_datatree
@@ -63,12 +64,35 @@ def test_var_metadata_shape_and_dims(tiny_zarr_store: Path) -> None:
     assert temp["dims"] == ["lat", "lon"]
     assert temp["shape"] == [4, 3]
     assert temp["attrs"] == {"units": "K"}
-    assert temp["dtype"].lower().startswith("float64") or "f8" in temp["dtype"]
+    assert temp["dtype"] == "float64"
 
     mask = by_name["mask"]
     assert mask["dims"] == ["lat", "lon"]
     assert mask["shape"] == [4, 3]
     assert mask["attrs"] == {}
+    assert mask["dtype"] == "int8"
+
+
+def test_var_dtype_is_a_numpy_dtype_string(tiny_zarr_store: Path) -> None:
+    """Every walk dtype must be something ``numpy.dtype()`` accepts.
+
+    Guards a silent-corruption mode: zarrs's ``Display for DataType``
+    renders *both* Zarr spellings when they differ (``float64`` becomes
+    ``"float64 / <f8"``), which numpy rejects. Asserting on a canonical
+    name alone wouldn't catch it — ``"float64 / <f8"`` still starts with
+    ``"float64"`` — so parse it for real.
+    """
+    tree = open_datatree(str(tiny_zarr_store))
+    dtypes = {var["name"]: var["dtype"] for var in tree["/"]["vars"]}
+    assert dtypes, "fixture produced no vars"
+    for name, dtype in dtypes.items():
+        # `np.dtype` raises TypeError on the corrupted form; `.name`
+        # round-tripping back to the same string also pins it to the
+        # canonical spelling rather than an accepted-but-different alias.
+        # Deliberately no exact-value assertion here — that lives in
+        # `test_var_metadata_shape_and_dims`, and pinning values here
+        # would dominate this check and make it untestable.
+        assert np.dtype(dtype).name == dtype, f"{name}: {dtype!r}"
 
 
 def test_explicit_group_root_is_default(tiny_zarr_store: Path) -> None:

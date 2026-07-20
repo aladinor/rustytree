@@ -170,5 +170,9 @@ def test_read_unsupported_dtype_raises_clearly(tmp_path: Path) -> None:
     tree = open_datatree(str(path))
     handle = _vars_by_name(tree, "/")["z"]["handle"]
     rusty = RustyBackendArray(handle)
-    with pytest.raises(NotImplementedError, match="dtype"):
+    # Match the dtype *name*, not just the word "dtype": the message is
+    # built from `zarrs_dtype_to_numpy_str`, so this also pins that the
+    # unsupported-arm namer works (it used to render zarrs-internal
+    # debug output like `DataType(Complex64DataType)`).
+    with pytest.raises(NotImplementedError, match="dtype complex64"):
         rusty[indexing.BasicIndexer((slice(None),))]

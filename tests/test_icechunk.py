@@ -51,10 +51,17 @@ def test_var_metadata_matches_vanilla(tiny_icechunk_repo: Path) -> None:
     assert temp["dims"] == ["lat", "lon"]
     assert temp["shape"] == [4, 3]
     assert temp["attrs"] == {"units": "K"}
+    # dtype matters here specifically: the icechunk snapshot path builds
+    # `VarMeta` in `build_var_meta_from_snapshot`, a *separate* site from
+    # the vanilla walk's `open_array_meta`. Without this the snapshot
+    # site could regress to zarrs's `Display` (`"float64 / <f8"`, which
+    # numpy rejects) with the whole suite still green.
+    assert temp["dtype"] == "float64"
 
     mask = by_name["mask"]
     assert mask["dims"] == ["lat", "lon"]
     assert mask["shape"] == [4, 3]
+    assert mask["dtype"] == "int8"
 
 
 def test_explicit_main_branch_is_default(tiny_icechunk_repo: Path) -> None:

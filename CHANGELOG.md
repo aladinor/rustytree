@@ -23,6 +23,33 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Changed
 
+- Bump `zarrs` 0.22 → 0.23 ([#60]). A breaking upstream release: `DataType`
+  became a newtype over `Arc<dyn DataTypeTraits>` rather than an enum, so the
+  shared `for_each_supported_dtype!` dispatch is now an
+  `is::<Float64DataType>()` chain against the marker types in
+  `zarrs::array::data_type`. `ArraySubset` moved from the removed
+  `zarrs::array_subset` module into `zarrs::array`, and
+  `async_retrieve_array_subset_elements::<T>` (deprecated in 0.23, already
+  deleted upstream for 0.24) became `async_retrieve_array_subset::<Vec<T>>`.
+  The supported-dtype set, the read path, and the storage stack are otherwise
+  unchanged — `zarrs_storage` still resolves to a single 0.4.x, so
+  `zarrs_object_store` and `zarrs_icechunk` needed no bump and the icechunk
+  FFI lockstep is untouched.
+  - Fixes a dtype string that 0.23 would have silently corrupted: the walk
+    built `VarMeta::dtype` via `format!("{}", array.data_type())`, and 0.23's
+    `Display` renders *both* Zarr spellings when they differ (`float64` →
+    `"float64 / <f8"`), which `numpy.dtype()` rejects. Both walk sites now
+    route through `zarrs_dtype_to_numpy_str`, the same canonical mapper the
+    array handle already used.
+  - `zarrs_dtype_to_numpy_str` now reads the dtype's Zarr V3 name (identical
+    to the NumPy name for all thirteen dtypes we can name; pinned by a new
+    unit test) instead of maintaining a parallel hand-written table. The one
+    exception is `bytes`, reported as `object` to match zarr-python —
+    `np.dtype("bytes")` is `|S0`, which would mislabel a variable-length
+    binary array rather than fail. Dtypes we can neither read nor safely
+    rename (`string`, `numpy.datetime64`, `r32`, …) still surface as a
+    `TypeError` from `np.dtype()` at open, as before.
+
 - CI: bump GitHub Actions off the deprecated Node 20 runtime ([#55], fixes #54).
   `actions/checkout` v4 → v5, `actions/setup-python` v5 → v6,
   `actions/upload-artifact` v4 → v6, `actions/download-artifact` v4 → v7 — the
@@ -771,4 +798,5 @@ below.
 [#52]: https://github.com/aladinor/rustytree/pull/52
 [#55]: https://github.com/aladinor/rustytree/pull/55
 [#56]: https://github.com/aladinor/rustytree/pull/56
+[#60]: https://github.com/aladinor/rustytree/pull/60
 [#61]: https://github.com/aladinor/rustytree/pull/61

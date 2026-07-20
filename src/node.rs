@@ -44,7 +44,10 @@ pub(crate) struct VarMeta {
     /// Dimension names from the array's `dimension_names` (synthesised as
     /// `dim_0`, `dim_1`, ... when the array doesn't declare them).
     pub dims: Vec<String>,
-    /// Numpy-style dtype string (e.g. `"<f8"`, `"<i4"`).
+    /// Canonical `NumPy` dtype name (e.g. `"float64"`, `"int32"`), as
+    /// produced by `array::zarrs_dtype_to_numpy_str` — not the Zarr V2
+    /// spelling (`"<f8"`) and not zarrs's `Display`, which renders both
+    /// spellings at once and is not parseable by `numpy.dtype()`.
     pub dtype: String,
     /// Array shape in elements.
     pub shape: Vec<u64>,

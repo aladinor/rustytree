@@ -7,11 +7,12 @@
 //! resulting `Array` is then handed out wrapped in a `ZarrsArrayHandle`
 //! so xarray can call back through `read_subset` whenever it needs data.
 //!
-//! `read_subset` runs `runtime.block_on(array.async_retrieve_array_subset_elements::<T>(...))`
+//! `read_subset` runs `runtime.block_on(array.async_retrieve_array_subset::<Vec<T>>(...))`
 //! with the GIL released (`Python::detach`) so concurrent loads from a
 //! Python thread pool overlap on the network rather than serialising
 //! through the GIL.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use numpy::PyArray1;
@@ -20,8 +21,8 @@ use pyo3::exceptions::{PyIndexError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
 use tokio::runtime::Handle;
-use zarrs::array::{Array, DataType};
-use zarrs::array_subset::ArraySubset;
+use zarrs::array::{Array, ArraySubset, DataType, data_type};
+use zarrs::plugin::ExtensionName;
 use zarrs_storage::AsyncReadableListableStorageTraits;
 
 use crate::dtype_dispatch::for_each_supported_dtype;
@@ -88,9 +89,11 @@ impl ZarrsArrayHandle {
     }
 
     /// The array's dtype as a `NumPy` dtype string (e.g. `"float64"`,
-    /// `"int8"`). Falls back to `format!("{:?}")` for less common
-    /// dtypes, which `numpy.dtype(...)` will raise on — those need
-    /// explicit support added here when we encounter them.
+    /// `"int8"`). Naming is broader than reading: a dtype can be named
+    /// here and still be refused by `read_subset` until it is added to
+    /// `for_each_supported_dtype!`. Dtypes we can neither read nor name
+    /// safely yield a string `numpy.dtype()` rejects — see
+    /// [`zarrs_dtype_to_numpy_str`] for why that is deliberate.
     #[getter]
     fn dtype(&self) -> String {
         zarrs_dtype_to_numpy_str(self.array.data_type())
@@ -222,14 +225,13 @@ impl ZarrsArrayHandle {
         // array back to Python. The Python adapter reshapes; doing it
         // here would force every dtype to materialise an ndarray crate
         // type, which costs an extra dependency for no benefit.
-        let dtype = self.array.data_type().clone();
         let array = self.array.clone();
         let runtime = self.runtime.clone();
 
-        for_each_supported_dtype!(dtype, T => {
+        for_each_supported_dtype!(self.array.data_type(), T => {
             let elements: Vec<T> = py.detach(|| -> PyResult<Vec<T>> {
                 runtime
-                    .block_on(array.async_retrieve_array_subset_elements::<T>(&subset))
+                    .block_on(array.async_retrieve_array_subset::<Vec<T>>(&subset))
                     .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
             })?;
             let sliced = slice_nd(
@@ -240,8 +242,10 @@ impl ZarrsArrayHandle {
             );
             PyArray1::from_vec(py, sliced).into_bound_py_any(py)
         }, other => {
+            // Canonical name, not Debug/Display — see `zarrs_dtype_to_numpy_str`.
+            let name = zarrs_dtype_to_numpy_str(other);
             Err(PyNotImplementedError::new_err(format!(
-                "rustytree: dtype {other:?} is not yet supported by ZarrsArrayHandle.read_subset; \
+                "rustytree: dtype {name} is not yet supported by ZarrsArrayHandle.read_subset; \
                  supported today: bool, int{{8,16,32,64}}, uint{{8,16,32,64}}, float{{32,64}}"
             )))
         })
@@ -362,23 +366,120 @@ pub(crate) fn _reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<Zar
 }
 
 /// Translate `zarrs::array::DataType` to the canonical `NumPy` dtype
-/// string. Anything unsupported returns `format!("{:?}")` so callers
-/// see a clear error when they try to `numpy.dtype(...)` it.
+/// string.
+///
+/// The Zarr V3 name *is* the `NumPy` name for every dtype we support
+/// (`float64`, `int8`, `complex128`, …), so this is a lookup rather than
+/// a table — see `maps_every_named_dtype_to_its_numpy_name`, which pins
+/// all thirteen so an upstream alias rename can't slip through. rustytree
+/// is V3-only, so the V3 spelling is the one the metadata actually used.
+///
+/// Deliberately does *not* use `Display`: zarrs 0.23 renders both Zarr
+/// spellings when they differ, so `float64` comes out as
+/// `"float64 / <f8"` — which `numpy.dtype()` rejects.
+///
+/// Two behaviours worth knowing:
+///
+/// - `bytes` is special-cased *away* from its V3 name. `np.dtype("bytes")`
+///   is `|S0` (fixed-width, zero itemsize), so passing the V3 name through
+///   would silently mislabel a variable-length binary array rather than
+///   fail. zarr-python maps this dtype to `object`, so we do too.
+/// - Names we can't read and can't safely rename (`string`,
+///   `numpy.datetime64`, `fixed_length_utf32`, `r32`) pass through and
+///   make `np.dtype()` raise `TypeError` at open. That loud failure is
+///   intended. `string` is *not* folded in with `bytes`: zarr-python maps
+///   it to `StringDType`, not `object`, so calling it `object` would be a
+///   different lie rather than a fix.
 pub(crate) fn zarrs_dtype_to_numpy_str(dtype: &DataType) -> String {
-    match dtype {
-        DataType::Bool => "bool".into(),
-        DataType::Int8 => "int8".into(),
-        DataType::Int16 => "int16".into(),
-        DataType::Int32 => "int32".into(),
-        DataType::Int64 => "int64".into(),
-        DataType::UInt8 => "uint8".into(),
-        DataType::UInt16 => "uint16".into(),
-        DataType::UInt32 => "uint32".into(),
-        DataType::UInt64 => "uint64".into(),
-        DataType::Float32 => "float32".into(),
-        DataType::Float64 => "float64".into(),
-        DataType::Complex64 => "complex64".into(),
-        DataType::Complex128 => "complex128".into(),
-        other => format!("{other:?}"),
+    if dtype.is::<data_type::BytesDataType>() {
+        return "object".to_owned();
+    }
+    dtype
+        .name_v3()
+        .map_or_else(|| dtype.to_string(), Cow::into_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zarrs_dtype_to_numpy_str;
+    use crate::dtype_dispatch::for_each_supported_dtype;
+    use zarrs::array::{DataType, data_type};
+
+    /// zarrs 0.22's `DataType` was an enum, so the compiler checked the
+    /// dtype dispatch for us. In 0.23 it is a newtype over
+    /// `Arc<dyn DataTypeTraits>`, and we now lean on zarrs's own V3
+    /// aliases for the names — so this table is what guarantees an
+    /// upstream alias rename shows up as a failing test rather than as a
+    /// dtype string numpy can't parse. Needs no store and no Python, so
+    /// it also covers the dtypes our pytest fixtures never create.
+    #[test]
+    fn maps_every_named_dtype_to_its_numpy_name() {
+        for (dtype, expected) in [
+            (data_type::bool(), "bool"),
+            (data_type::int8(), "int8"),
+            (data_type::int16(), "int16"),
+            (data_type::int32(), "int32"),
+            (data_type::int64(), "int64"),
+            (data_type::uint8(), "uint8"),
+            (data_type::uint16(), "uint16"),
+            (data_type::uint32(), "uint32"),
+            (data_type::uint64(), "uint64"),
+            (data_type::float32(), "float32"),
+            (data_type::float64(), "float64"),
+            (data_type::complex64(), "complex64"),
+            (data_type::complex128(), "complex128"),
+            // Not readable, but must still be *named* safely:
+            // `np.dtype("bytes")` is `|S0`, so the V3 name must not pass
+            // through. `string` deliberately does pass through — see
+            // `zarrs_dtype_to_numpy_str`.
+            (data_type::bytes(), "object"),
+            (data_type::string(), "string"),
+            // Readable-name-only fallthrough that numpy does accept.
+            (data_type::float16(), "float16"),
+        ] {
+            assert_eq!(zarrs_dtype_to_numpy_str(&dtype), expected);
+        }
+    }
+
+    /// The macro's marker→primitive pairings, pinned the same way. A
+    /// swapped arm here would silently reinterpret the chunk bytes at a
+    /// wrong element width, so it matters more than the name table.
+    #[test]
+    fn dispatch_macro_binds_the_matching_primitive_type() {
+        fn primitive_for(dtype: &DataType) -> &'static str {
+            for_each_supported_dtype!(dtype, T => {
+                std::any::type_name::<T>()
+            }, _other => {
+                "unsupported"
+            })
+        }
+
+        for (dtype, expected) in [
+            (data_type::bool(), "bool"),
+            (data_type::int8(), "i8"),
+            (data_type::int16(), "i16"),
+            (data_type::int32(), "i32"),
+            (data_type::int64(), "i64"),
+            (data_type::uint8(), "u8"),
+            (data_type::uint16(), "u16"),
+            (data_type::uint32(), "u32"),
+            (data_type::uint64(), "u64"),
+            (data_type::float32(), "f32"),
+            (data_type::float64(), "f64"),
+        ] {
+            assert_eq!(primitive_for(&dtype), expected);
+        }
+
+        // complex64 is nameable but not readable — it must reach the
+        // fallback arm, not silently pick a primitive.
+        assert_eq!(primitive_for(&data_type::complex64()), "unsupported");
+    }
+
+    /// Pins the upstream behaviour that forced this mapper to exist. If
+    /// a future zarrs makes `Display` numpy-safe, this fails and the
+    /// workaround can go.
+    #[test]
+    fn zarrs_display_is_not_a_numpy_dtype_string() {
+        assert_eq!(data_type::float64().to_string(), "float64 / <f8");
     }
 }

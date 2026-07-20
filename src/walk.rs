@@ -20,11 +20,11 @@ use icechunk::format::Path as IcePath;
 use icechunk::format::snapshot::NodeData as IceNodeData;
 use icechunk::session::Session;
 use tokio::sync::{RwLock, Semaphore};
-use zarrs::array::{Array, ArrayMetadata};
-use zarrs::array_subset::ArraySubset;
+use zarrs::array::{Array, ArrayMetadata, ArraySubset};
 use zarrs::group::{Group, GroupCreateError, GroupMetadata};
 use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTraits};
 
+use crate::array::zarrs_dtype_to_numpy_str;
 use crate::dtype_dispatch::for_each_supported_dtype;
 use crate::error::{Result, RustytreeError};
 use crate::glob::GlobPredicate;
@@ -436,7 +436,7 @@ fn build_var_meta_from_snapshot(
         },
     );
 
-    let dtype = format!("{}", array.data_type());
+    let dtype = zarrs_dtype_to_numpy_str(array.data_type());
     let shape = array.shape().to_vec();
     let attrs = clone_attrs(array.attributes());
 
@@ -564,7 +564,7 @@ async fn open_array_meta(
         },
     );
 
-    let dtype = format!("{}", array.data_type());
+    let dtype = zarrs_dtype_to_numpy_str(array.data_type());
     let shape = array.shape().to_vec();
     let attrs = clone_attrs(array.attributes());
 
@@ -624,10 +624,9 @@ async fn fetch_all_elements(
     array: &Arc<Array<dyn AsyncReadableListableStorageTraits>>,
 ) -> Result<EagerElements> {
     let subset = ArraySubset::new_with_shape(array.shape().to_vec());
-    let dtype = array.data_type().clone();
-    for_each_supported_dtype!(dtype, T => {
+    for_each_supported_dtype!(array.data_type(), T => {
         let elements: Vec<T> = array
-            .async_retrieve_array_subset_elements::<T>(&subset)
+            .async_retrieve_array_subset::<Vec<T>>(&subset)
             .await
             .map_err(|err| {
                 RustytreeError::Other(format!("eager fetch failed: {err}"))
@@ -636,8 +635,9 @@ async fn fetch_all_elements(
     }, other => {
         // Unsupported dtype — skip eagerly; the var stays lazy. The
         // caller treats this `Err` as "leave eager=None and continue".
+        let name = zarrs_dtype_to_numpy_str(other);
         Err(RustytreeError::Other(format!(
-            "eager fetch: dtype {other:?} not yet supported"
+            "eager fetch: dtype {name} not yet supported"
         )))
     })
 }
