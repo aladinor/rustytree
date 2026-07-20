@@ -261,9 +261,17 @@ calls (to populate `VarMeta`); the handle keeps the resulting
 - `shape`, `dtype` (canonical NumPy string), `chunks`
 - `read_subset(ranges)` where `ranges = list[tuple[int, int]]` (one
   `(start, stop)` per dim, exclusive stop). Runs
-  `runtime.block_on(array.async_retrieve_array_subset_elements::<T>(...))`
+  `runtime.block_on(array.async_retrieve_array_subset::<Vec<T>>(...))`
   with the GIL released via `Python::detach`. Returns a 1-D NumPy
   array of the matching primitive type.
+
+  Ranges must arrive **already normalised**: `0 <= start <= stop <=
+  shape[i]`. Translating Python slice semantics — reversed, negative or
+  out-of-range endpoints — is the Python adapter's job (see
+  `_raw_indexing_method` below), so that a malformed range from any
+  other caller still raises rather than being silently read as empty.
+  An empty selection (`start == stop` on any axis) is answered without
+  fetching a chunk.
 
 Python-side, `RustyBackendArray(BackendArray)` adapts xarray's
 indexing protocol to the handle:
@@ -274,7 +282,10 @@ indexing protocol to the handle:
   basic reads.
 - `_raw_indexing_method` translates xarray's tuple-of-(slice|int)
   into `(start, stop)` ranges, calls `handle.read_subset(ranges)`,
-  reshapes, and squeezes axes selected by integer indexers.
+  reshapes, and squeezes axes selected by integer indexers. This is
+  the normalisation layer for the contract above: `slice.indices()`
+  clamps the endpoints, and a reversed slice (`v[5:3]`) is folded to
+  an empty range here rather than reaching Rust.
 
 The `RustytreeBackendEntrypoint` builds a `_RustyDataStore` shim
 around each `NodeData` and delegates to xarray's

@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 import xarray as xr
 import zarr
+from conftest import vars_by_name
 
 from rustytree._rustytree import open_datatree
 
@@ -57,7 +58,7 @@ def chunked_zarr_store(tmp_path: Path) -> Path:
 
 def test_handle_exposes_chunks(chunked_zarr_store: Path) -> None:
     tree = open_datatree(str(chunked_zarr_store))
-    by_name = {var["name"]: var for var in tree["/"]["vars"]}
+    by_name = vars_by_name(tree)
     assert tuple(by_name["t"]["handle"].chunks) == (4,)
     assert tuple(by_name["field"]["handle"].chunks) == (1, 12, 6)
 
@@ -101,14 +102,14 @@ def test_chunks_empty_round_trips_values(chunked_zarr_store: Path) -> None:
 # ---- empty selections (issue #65) ----
 
 
-@pytest.fixture
-def ragged_zarr_store(tmp_path: Path) -> Path:
+@pytest.fixture(scope="module")
+def ragged_zarr_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Store whose shape is NOT a multiple of its chunk shape.
 
     The ragged final chunk is what made an empty read at the very end of
     the array panic rather than merely return the wrong length.
     """
-    path = tmp_path / "ragged.zarr"
+    path = tmp_path_factory.mktemp("ragged") / "ragged.zarr"
     root = zarr.create_group(store=str(path), zarr_format=3)
     v = root.create_array("v", shape=(13,), dtype="float64", chunks=(4,), dimension_names=("n",))
     v[:] = np.arange(13, dtype=np.float64)
@@ -139,86 +140,49 @@ def test_empty_selection_returns_no_elements(ragged_zarr_store: Path, start: int
     derives from `BaseException` and so slips past `except Exception`.
     """
     tree = open_datatree(str(ragged_zarr_store))
-    handle = {var["name"]: var["handle"] for var in tree["/"]["vars"]}["v"]
+    handle = vars_by_name(tree)["v"]["handle"]
     out = handle.read_subset([(start, start)])
     assert len(out) == 0
     assert out.dtype == np.float64
 
 
 @pytest.mark.parametrize(
-    "sel",
+    ("var", "sel"),
     [
-        {"n": slice(1, 1)},
-        {"n": slice(13, 13)},
-        {"n": slice(0, 0)},
-        {"n": slice(2, 5)},  # non-empty control
+        # 1-D, ragged (shape 13 / chunks 4).
+        ("v", {"n": slice(1, 1)}),  # unaligned offset: used to return 1 element
+        ("v", {"n": slice(13, 13)}),  # end of the ragged chunk: used to panic
+        ("v", {"n": slice(0, 0)}),
+        ("v", {"n": slice(5, 3)}),  # reversed: empty for numpy, must not raise
+        ("v", {"n": slice(2, 5)}),  # non-empty control
+        # Eagerly pre-fetched self-named dim coord over the same dim. The
+        # walk serves this from `var["data"]`, never `read_subset`, so the
+        # eager and lazy halves must agree on length.
+        ("n", {"n": slice(1, 1)}),
+        ("n", {"n": slice(13, 13)}),
+        # 2-D, both axes ragged (7x5 / chunks 3x2).
+        ("g", {"y": slice(1, 1)}),
+        ("g", {"x": slice(3, 3)}),
+        ("g", {"y": slice(1, 1), "x": slice(2, 4)}),
+        ("g", {"y": slice(7, 7)}),
+        ("g", {"y": slice(1, 1), "x": slice(3, 3)}),  # every axis empty
+        ("g", {"y": slice(5, 2)}),  # reversed
+        ("g", {"y": slice(1, 4), "x": slice(1, 4)}),  # non-empty control
+        # 3-D exercises the per-axis stride arithmetic; reading a 3-D
+        # array whole takes the identity fast path and never does.
+        ("c", {"z": slice(1, 1)}),
+        ("c", {"cx": slice(3, 3)}),
+        ("c", {"z": slice(1, 1), "cy": slice(1, 3), "cx": slice(1, 3)}),
+        ("c", {"z": slice(1, 4), "cy": slice(1, 3), "cx": slice(1, 3)}),  # control
     ],
 )
-def test_empty_selection_matches_zarr_engine_1d(ragged_zarr_store: Path, sel: dict) -> None:
+def test_selection_matches_zarr_engine(ragged_zarr_store: Path, var: str, sel: dict) -> None:
+    """Empty (and control non-empty) selections must match `engine="zarr"`."""
     rusty = xr.open_dataset(str(ragged_zarr_store), engine="rustytree")
     zarr_ds = xr.open_dataset(str(ragged_zarr_store), engine="zarr", consolidated=False)
-    np.testing.assert_array_equal(rusty.v.isel(**sel).values, zarr_ds.v.isel(**sel).values)
-
-
-@pytest.mark.parametrize(
-    "sel",
-    [
-        {"y": slice(1, 1)},  # one axis empty, the other full
-        {"x": slice(3, 3)},
-        {"y": slice(1, 1), "x": slice(2, 4)},  # empty axis + non-aligned offset
-        {"y": slice(7, 7)},  # end of a ragged dimension
-        {"y": slice(1, 1), "x": slice(3, 3)},  # every axis empty at once
-        {"y": slice(5, 2)},  # reversed slice: empty for numpy, must not raise
-        {"y": slice(1, 4), "x": slice(1, 4)},  # non-empty control
-    ],
-)
-def test_empty_selection_matches_zarr_engine_2d(ragged_zarr_store: Path, sel: dict) -> None:
-    """An empty axis must not disturb the other axes' extents."""
-    rusty = xr.open_dataset(str(ragged_zarr_store), engine="rustytree")
-    zarr_ds = xr.open_dataset(str(ragged_zarr_store), engine="zarr", consolidated=False)
-    np.testing.assert_array_equal(rusty.g.isel(**sel).values, zarr_ds.g.isel(**sel).values)
-
-
-@pytest.mark.parametrize(
-    "sel",
-    [
-        {"z": slice(1, 1)},
-        {"cx": slice(3, 3)},
-        {"z": slice(1, 1), "cy": slice(1, 3), "cx": slice(1, 3)},
-        {"z": slice(1, 4), "cy": slice(1, 3), "cx": slice(1, 3)},  # non-empty control
-    ],
-)
-def test_empty_selection_matches_zarr_engine_3d(ragged_zarr_store: Path, sel: dict) -> None:
-    """3-D exercises `slice_nd`'s per-axis stride arithmetic; reading a
-    3-D array whole takes the identity fast path and never does."""
-    rusty = xr.open_dataset(str(ragged_zarr_store), engine="rustytree")
-    zarr_ds = xr.open_dataset(str(ragged_zarr_store), engine="zarr", consolidated=False)
-    np.testing.assert_array_equal(rusty.c.isel(**sel).values, zarr_ds.c.isel(**sel).values)
-
-
-def test_empty_selection_on_eager_dim_coord(ragged_zarr_store: Path) -> None:
-    """The issue's own reproducer shape: an empty selection over a
-    self-named dim coord, which the walk pre-fetches eagerly, alongside a
-    lazily-read data var on the same dim."""
-    rusty = xr.open_dataset(str(ragged_zarr_store), engine="rustytree")
-    zarr_ds = xr.open_dataset(str(ragged_zarr_store), engine="zarr", consolidated=False)
-    for sel in ({"n": slice(1, 1)}, {"n": slice(13, 13)}):
-        np.testing.assert_array_equal(rusty.n.isel(**sel).values, zarr_ds.n.isel(**sel).values)
-        np.testing.assert_array_equal(rusty.v.isel(**sel).values, zarr_ds.v.isel(**sel).values)
-
-
-@pytest.mark.parametrize("dtype", ["bool", "int8", "uint16", "float32", "float64"])
-def test_empty_selection_preserves_dtype(tmp_path: Path, dtype: str) -> None:
-    """The short-circuit runs its own dtype dispatch, so every supported
-    dtype must come back with the right one -- not just float64."""
-    path = tmp_path / f"dt_{dtype}.zarr"
-    root = zarr.create_group(store=str(path), zarr_format=3)
-    a = root.create_array("a", shape=(13,), dtype=dtype, chunks=(4,), dimension_names=("n",))
-    a[:] = np.ones(13, dtype=dtype)
-    handle = {var["name"]: var["handle"] for var in open_datatree(str(path))["/"]["vars"]}["a"]
-    out = handle.read_subset([(1, 1)])
-    assert len(out) == 0
-    assert out.dtype == np.dtype(dtype)
+    np.testing.assert_array_equal(
+        getattr(rusty, var).isel(**sel).values, getattr(zarr_ds, var).isel(**sel).values
+    )
 
 
 def test_empty_selection_does_not_fetch_the_chunk(tmp_path: Path) -> None:
@@ -239,7 +203,7 @@ def test_empty_selection_does_not_fetch_the_chunk(tmp_path: Path) -> None:
     v[:] = np.arange(13, dtype=np.float64)
     (path / "v" / "c" / "3").write_bytes(b"\x00\x00")  # truncate chunk 3 (elements 12..13)
 
-    handle = {var["name"]: var["handle"] for var in open_datatree(str(path))["/"]["vars"]}["v"]
+    handle = vars_by_name(open_datatree(str(path)))["v"]["handle"]
     assert len(handle.read_subset([(13, 13)])) == 0
     assert len(handle.read_subset([(12, 12)])) == 0
     with pytest.raises(ValueError, match="zarrs read failed"):
@@ -249,9 +213,7 @@ def test_empty_selection_does_not_fetch_the_chunk(tmp_path: Path) -> None:
 def test_read_subset_still_validates_ranges(ragged_zarr_store: Path) -> None:
     """The short-circuit sits *after* validation; hoisting it above would
     silently turn these into empty successes."""
-    handle = {
-        var["name"]: var["handle"] for var in open_datatree(str(ragged_zarr_store))["/"]["vars"]
-    }["v"]
+    handle = vars_by_name(open_datatree(str(ragged_zarr_store)))["v"]["handle"]
     with pytest.raises(IndexError, match="exceeds dim size"):
         handle.read_subset([(14, 14)])
     with pytest.raises(IndexError, match="expected 1 ranges"):

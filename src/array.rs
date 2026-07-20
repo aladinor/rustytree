@@ -135,8 +135,15 @@ impl ZarrsArrayHandle {
 
     /// Read a hyperrectangular slab of the array.
     ///
-    /// `ranges` is a list of `(start, stop)` tuples — one per
-    /// dimension, exclusive stop, matching Python `slice` semantics.
+    /// `ranges` is a list of already-normalised half-open `(start, stop)`
+    /// tuples, one per dimension, satisfying
+    /// `0 <= start <= stop <= shape[i]`. Translating Python slice
+    /// semantics — reversed, negative or out-of-range endpoints — is the
+    /// caller's job; `RustyBackendArray._raw_indexing_method` is where
+    /// that happens. A reversed range is rejected here rather than
+    /// silently read as empty, so a malformed range from any other caller
+    /// still surfaces.
+    ///
     /// Returns a 1-D `NumPy` array of length `prod(stop_i - start_i)`;
     /// the Python adapter (`RustyBackendArray`) reshapes to the
     /// requested shape.
@@ -181,19 +188,11 @@ impl ZarrsArrayHandle {
         }
 
         // An empty selection (any axis with `start == stop`, e.g.
-        // `isel(time=slice(1, 1))`) has no elements to fetch. Answer it
-        // here rather than below: the chunk-alignment step would expand
-        // it to a whole chunk and pull that chunk off the network — a
-        // full round-trip on S3 — only to slice everything back out
-        // again. `slice_nd` also handles the empty case, so this is an
-        // I/O optimisation rather than the correctness fix.
-        if ranges.iter().any(|(start, stop)| start == stop) {
-            return for_each_supported_dtype!(self.array.data_type(), T => {
-                PyArray1::from_vec(py, Vec::<T>::new()).into_bound_py_any(py)
-            }, other => {
-                Err(unsupported_dtype_err(other))
-            });
-        }
+        // `isel(time=slice(1, 1))`) has nothing to fetch. Skipping the
+        // read matters: chunk alignment below would expand it to a whole
+        // chunk and pull that off the network — a full round-trip on S3 —
+        // only to slice everything back out again.
+        let is_empty = ranges.iter().any(|(start, stop)| start == stop);
 
         // Align the requested ranges to chunk-grid boundaries so each
         // chunk read goes through zarrs's `async_retrieve_chunk_opt`
@@ -244,11 +243,18 @@ impl ZarrsArrayHandle {
         let runtime = self.runtime.clone();
 
         for_each_supported_dtype!(self.array.data_type(), T => {
-            let elements: Vec<T> = py.detach(|| -> PyResult<Vec<T>> {
-                runtime
-                    .block_on(array.async_retrieve_array_subset::<Vec<T>>(&subset))
-                    .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
-            })?;
+            // The empty case skips the read but still flows through this
+            // one dispatch, so the returned array carries the same dtype
+            // a non-empty read would, from a single code path.
+            let elements: Vec<T> = if is_empty {
+                Vec::new()
+            } else {
+                py.detach(|| -> PyResult<Vec<T>> {
+                    runtime
+                        .block_on(array.async_retrieve_array_subset::<Vec<T>>(&subset))
+                        .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
+                })?
+            };
             let sliced = slice_nd(
                 elements,
                 &aligned_shape,
@@ -257,7 +263,12 @@ impl ZarrsArrayHandle {
             );
             PyArray1::from_vec(py, sliced).into_bound_py_any(py)
         }, other => {
-            Err(unsupported_dtype_err(other))
+            // The store's own spelling — see `zarrs_dtype_zarr_name`.
+            let name = zarrs_dtype_zarr_name(other);
+            Err(PyNotImplementedError::new_err(format!(
+                "rustytree: dtype {name} is not yet supported by ZarrsArrayHandle.read_subset; \
+                 supported today: bool, int{{8,16,32,64}}, uint{{8,16,32,64}}, float{{32,64}}"
+            )))
         })
     }
 
@@ -313,17 +324,10 @@ fn slice_nd<T: Copy>(
     for i in (0..n.saturating_sub(1)).rev() {
         src_strides[i] = src_strides[i + 1] * aligned_shape[i + 1];
     }
-    // Walk the output shape in row-major order, computing the source
-    // index for each destination element.
-    //
-    // Driven by `total_out` rather than by a carry-rollover exit, which
-    // makes the loop total by construction: an empty request (any axis
-    // with zero extent, e.g. `isel(n=slice(1, 1))`) runs zero iterations
-    // instead of pushing an element before it can discover it has none
-    // to push. That do-while shape was #65 — it returned one bogus
-    // element, and indexed out of bounds when the aligned buffer had
-    // been clamped to the array shape. A 0-D scalar is `n == 0`, so
-    // `total_out == 1` and the body runs exactly once with `src == 0`.
+    // Walk the output in row-major order, computing the source index for
+    // each destination element. Count-driven rather than exiting on a
+    // carry rollover, so an empty request is zero iterations and the loop
+    // is total by construction — that was #65.
     let mut idx = vec![0_usize; n];
     for _ in 0..total_out {
         let mut src = 0_usize;
@@ -414,19 +418,6 @@ pub(crate) fn zarrs_dtype_to_numpy_str(dtype: &DataType) -> String {
     zarrs_dtype_zarr_name(dtype)
 }
 
-/// The error for a dtype `read_subset` can name but not decode.
-///
-/// Shared by both dispatch sites — the empty-selection short-circuit and
-/// the main read path — because the message enumerates the supported
-/// dtype set. Two copies would drift the moment that set changes.
-fn unsupported_dtype_err(dtype: &DataType) -> PyErr {
-    let name = zarrs_dtype_zarr_name(dtype);
-    PyNotImplementedError::new_err(format!(
-        "rustytree: dtype {name} is not yet supported by ZarrsArrayHandle.read_subset; \
-         supported today: bool, int{{8,16,32,64}}, uint{{8,16,32,64}}, float{{32,64}}"
-    ))
-}
-
 /// The dtype's Zarr V3 name — the spelling that appears in the store's
 /// own `zarr.json`.
 ///
@@ -448,17 +439,18 @@ mod tests {
     use crate::dtype_dispatch::for_each_supported_dtype;
     use zarrs::array::{DataType, data_type};
 
-    /// Regression tests for #65. The walk used to push an element before
-    /// it could test the bounds, so any zero-extent axis emitted one
-    /// bogus element — and indexed out of bounds when the aligned buffer
-    /// had been clamped to the array shape. Each arrangement below is
-    /// one that `read_subset` can actually construct.
+    /// Regression tests for #65: the walk used to push an element before
+    /// it could test the bounds.
+    ///
+    /// `read_subset` now skips the read for an empty selection, so these
+    /// arrangements are the ones it *would* build absent that skip. They
+    /// are kept deliberately: `slice_nd` is a `pub(crate)` helper whose
+    /// totality should not depend on one caller's fast path, and the
+    /// failure mode was an out-of-bounds panic.
     mod empty_selection {
         use super::slice_nd;
 
-        /// Offset inside a full chunk. Used to return one element.
-        /// `read_subset([(1, 1)])` on shape 12 / chunks 4 builds exactly
-        /// this: aligned 0..4, offset 1, out 0.
+        /// `read_subset([(1, 1)])` on shape 12 / chunks 4.
         #[test]
         fn at_unaligned_offset_yields_no_elements() {
             assert_eq!(
@@ -467,17 +459,14 @@ mod tests {
             );
         }
 
-        /// End of a ragged final chunk, where the aligned buffer was
-        /// clamped to the array shape. This is the case that *panicked*
-        /// (`len is 1 but the index is 1`) rather than returning a wrong
-        /// length: `read_subset([(13, 13)])` on shape 13 / chunks 4.
+        /// `read_subset([(13, 13)])` on shape 13 / chunks 4 — the
+        /// arrangement that panicked rather than returning a wrong length.
         #[test]
         fn at_end_of_clamped_ragged_chunk_yields_no_elements() {
             assert_eq!(slice_nd(vec![12.0], &[1], &[1], &[0]), Vec::<f64>::new());
         }
 
-        /// Chunk-aligned empty read — correct even before the fix, via
-        /// the identity fast path. Must stay correct.
+        /// Correct even before the fix, via the identity fast path.
         #[test]
         fn at_chunk_aligned_offset_yields_no_elements() {
             assert_eq!(
@@ -486,7 +475,6 @@ mod tests {
             );
         }
 
-        /// Only one axis empty; the other still has extent.
         #[test]
         fn with_one_empty_axis_of_two_yields_no_elements() {
             assert_eq!(
@@ -495,7 +483,6 @@ mod tests {
             );
         }
 
-        /// Both axes empty at once.
         #[test]
         fn with_every_axis_empty_yields_no_elements() {
             assert_eq!(
@@ -526,7 +513,7 @@ mod tests {
         );
     }
 
-    /// Non-empty slicing must be unaffected by the guard.
+    /// Non-empty slicing must be unaffected by the rewrite.
     #[test]
     fn slices_a_subrectangle_out_of_a_2d_buffer() {
         // 3x4 row-major buffer, take rows 1..3 x cols 1..3.
