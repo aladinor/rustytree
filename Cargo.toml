@@ -58,7 +58,7 @@ serde = { version = "1", features = ["derive"] }
 # such data by delegating to zarr-python's numcodecs shim. `numcodecs.shuffle`
 # is always compiled by zarrs; the other common compressors (gzip, blosc, zstd,
 # crc32c) come from zarrs's default features, which we keep enabled.
-zarrs = { version = "0.22", features = ["async", "zlib"] }
+zarrs = { version = "0.23", features = ["async", "zlib"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["fs", "aws"] }
 serde_json = "1"
