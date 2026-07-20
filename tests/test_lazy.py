@@ -176,3 +176,7 @@ def test_read_unsupported_dtype_raises_clearly(tmp_path: Path) -> None:
     # debug output like `DataType(Complex64DataType)`).
     with pytest.raises(NotImplementedError, match="dtype complex64"):
         rusty[indexing.BasicIndexer((slice(None),))]
+    # An *empty* selection takes the short-circuit's own dtype-dispatch
+    # fallback arm, which is a separate site from the main read path.
+    with pytest.raises(NotImplementedError, match="dtype complex64"):
+        handle.read_subset([(1, 1)])

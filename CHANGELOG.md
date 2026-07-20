@@ -59,6 +59,28 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ### Fixed
 
+- An empty selection no longer returns a stray element or panics ([#68], fixes
+  #65). `isel(time=slice(1, 1))` and friends returned one bogus element whenever
+  the offset was not a multiple of the chunk size, and raised
+  `pyo3_runtime.PanicException` when the selection sat at the end of a ragged
+  final chunk (e.g. `slice(13, 13)` on a shape-13 array with chunks of 4).
+  Raggedness was needed only for the panic — the wrong length happened on any
+  non-chunk-aligned offset, including on arrays whose shape divides evenly.
+  `slice_nd`'s walk was a do-while that pushed an element before it could test
+  the bounds; it is now driven by the output element count, so an empty request
+  runs zero iterations and totality is structural rather than a guard. The panic
+  mattered beyond the wrong length: `PanicException` derives from
+  `BaseException`, so it passed straight through ordinary `except Exception:`
+  handlers. Empty selections also short-circuit before the chunk-alignment step
+  now, so they no longer pull a chunk off the network to return nothing.
+
+- A reversed slice is empty rather than an error ([#68]). `v.isel(n=slice(5, 3))`
+  and `v[5:3]` raised `ValueError: start 5 > stop 3`, where numpy, pandas and
+  `engine="zarr"` all return an empty array. `slice.indices()` reports a reversed
+  slice faithfully as `(5, 3, 1)`, and that pair reached `read_subset` unchanged;
+  the Python adapter now normalises it. `read_subset` keeps its stricter
+  `start <= stop` contract, so a genuinely malformed range still raises.
+
 - Tests: the two opt-in KTWX smoke tests now skip when the directory exists but
   holds no icechunk repository ([#60]). The guard tested `KTWX_PATH.exists()`,
   so an empty leftover directory failed the guard's purpose and the tests
@@ -810,3 +832,4 @@ below.
 [#56]: https://github.com/aladinor/rustytree/pull/56
 [#60]: https://github.com/aladinor/rustytree/pull/60
 [#61]: https://github.com/aladinor/rustytree/pull/61
+[#68]: https://github.com/aladinor/rustytree/pull/68
