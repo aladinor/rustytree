@@ -63,7 +63,11 @@ class RustyBackendArray(BackendArray):
                         "expected to keep us at BASIC support"
                     )
                     raise NotImplementedError(msg)
-                ranges.append((start, stop))
+                # A reversed slice is empty, not an error (`a[5:3] == []`).
+                # Normalised here on purpose: `read_subset` keeps a
+                # stricter `start <= stop` contract so a malformed range
+                # from any other caller still raises.
+                ranges.append((start, max(start, stop)))
             else:
                 # Integer index — clamp into a single-element slab and
                 # mark the axis for squeezing.

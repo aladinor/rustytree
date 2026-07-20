@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import vars_by_name
 import xarray as xr
 from xarray.core import indexing
 
@@ -25,13 +26,9 @@ from rustytree._array import RustyBackendArray
 from rustytree._rustytree import ZarrsArrayHandle, open_datatree
 
 
-def _vars_by_name(tree: dict, group: str) -> dict[str, dict]:
-    return {var["name"]: var for var in tree[group]["vars"]}
-
-
 def test_handle_present_and_typed(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
     for name, var in by_name.items():
         assert "handle" in var, f"{name}: missing handle"
         assert isinstance(var["handle"], ZarrsArrayHandle), f"{name}: wrong handle type"
@@ -39,7 +36,7 @@ def test_handle_present_and_typed(tiny_zarr_store: Path) -> None:
 
 def test_handle_shape_and_dtype(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
 
     temp_handle = by_name["temp"]["handle"]
     assert tuple(temp_handle.shape) == (4, 3)
@@ -52,7 +49,7 @@ def test_handle_shape_and_dtype(tiny_zarr_store: Path) -> None:
 
 def test_full_read_matches_reference(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
 
     # The fixture writes np.arange(12, dtype=float64).reshape(4, 3).
     temp = RustyBackendArray(by_name["temp"]["handle"])
@@ -65,7 +62,7 @@ def test_full_read_matches_reference(tiny_zarr_store: Path) -> None:
 
 def test_full_read_int8_zeros(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
 
     mask = RustyBackendArray(by_name["mask"]["handle"])
     actual = mask[indexing.BasicIndexer((slice(None), slice(None)))]
@@ -75,7 +72,7 @@ def test_full_read_int8_zeros(tiny_zarr_store: Path) -> None:
 
 def test_basic_slice_indexing(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
     temp = RustyBackendArray(by_name["temp"]["handle"])
     expected = np.arange(12, dtype=np.float64).reshape(4, 3)
 
@@ -86,7 +83,7 @@ def test_basic_slice_indexing(tiny_zarr_store: Path) -> None:
 
 def test_integer_indexing_squeezes_axis(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
     temp = RustyBackendArray(by_name["temp"]["handle"])
     expected = np.arange(12, dtype=np.float64).reshape(4, 3)
 
@@ -108,7 +105,7 @@ def test_integer_indexing_squeezes_axis(tiny_zarr_store: Path) -> None:
 
 def test_negative_int_index_resolves(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
     temp = RustyBackendArray(by_name["temp"]["handle"])
     expected = np.arange(12, dtype=np.float64).reshape(4, 3)
 
@@ -118,7 +115,7 @@ def test_negative_int_index_resolves(tiny_zarr_store: Path) -> None:
 
 def test_handle_repr_is_informative(tiny_zarr_store: Path) -> None:
     tree = open_datatree(str(tiny_zarr_store))
-    handle = _vars_by_name(tree, "/")["temp"]["handle"]
+    handle = vars_by_name(tree, "/")["temp"]["handle"]
     rep = repr(handle)
     assert "shape=" in rep
     assert "float64" in rep
@@ -138,7 +135,7 @@ def test_data_round_trip_against_xarray(tiny_zarr_store: Path) -> None:
     """Hard parity check: rustytree's read_subset must match what
     `xr.open_zarr` produces on the same store, byte for byte."""
     tree = open_datatree(str(tiny_zarr_store))
-    by_name = _vars_by_name(tree, "/")
+    by_name = vars_by_name(tree, "/")
     ref = xr.open_zarr(tiny_zarr_store, consolidated=False)
 
     for name, expected in (("temp", ref["temp"]), ("mask", ref["mask"])):
@@ -168,7 +165,7 @@ def test_read_unsupported_dtype_raises_clearly(tmp_path: Path) -> None:
     arr[:] = np.array([1 + 2j, 3 + 4j], dtype=np.complex64)
 
     tree = open_datatree(str(path))
-    handle = _vars_by_name(tree, "/")["z"]["handle"]
+    handle = vars_by_name(tree, "/")["z"]["handle"]
     rusty = RustyBackendArray(handle)
     # Match the dtype *name*, not just the word "dtype": the message is
     # built from `zarrs_dtype_to_numpy_str`, so this also pins that the
@@ -176,3 +173,7 @@ def test_read_unsupported_dtype_raises_clearly(tmp_path: Path) -> None:
     # debug output like `DataType(Complex64DataType)`).
     with pytest.raises(NotImplementedError, match="dtype complex64"):
         rusty[indexing.BasicIndexer((slice(None),))]
+    # An empty selection is refused too, rather than short-circuiting to
+    # an empty array: naming a dtype we cannot read would be misleading.
+    with pytest.raises(NotImplementedError, match="dtype complex64"):
+        handle.read_subset([(1, 1)])

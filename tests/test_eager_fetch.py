@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import vars_by_name
 import xarray as xr
 import zarr
 
@@ -71,17 +72,13 @@ def time_zarr_store(tmp_path: Path) -> Path:
     return path
 
 
-def _vars_by_name(tree: dict, group: str = "/") -> dict[str, dict]:
-    return {var["name"]: var for var in tree[group]["vars"]}
-
-
 def test_eager_predicate_self_named_dim_coord(time_zarr_store: Path) -> None:
     """Self-named 1-D dim coords must carry `data` — they're what xarray's
     `_maybe_create_default_indexes` reads in its post-pass to build
     pandas Index objects, and pre-fetching them in parallel from Rust
     avoids the N×serial RTT cold-cache cost."""
     tree = open_datatree(str(time_zarr_store))
-    by_name = _vars_by_name(tree)
+    by_name = vars_by_name(tree)
 
     assert "data" in by_name["x"], "self-named 1-D coord should be eager-fetched"
     assert by_name["x"]["data"].shape == (4,)
@@ -95,7 +92,7 @@ def test_eager_predicate_skips_cf_time_like(time_zarr_store: Path) -> None:
     them eagerly would over-fetch on radar repos where time arrays are
     multi-MB per node."""
     tree = open_datatree(str(time_zarr_store))
-    by_name = _vars_by_name(tree)
+    by_name = vars_by_name(tree)
     assert "data" not in by_name["time"], (
         "CF time-likes must stay lazy; metadata-only datetime decode handles them"
     )
@@ -104,7 +101,7 @@ def test_eager_predicate_skips_cf_time_like(time_zarr_store: Path) -> None:
 def test_eager_predicate_skips_ordinary_data_var(time_zarr_store: Path) -> None:
     """2-D ordinary data variable must remain lazy."""
     tree = open_datatree(str(time_zarr_store))
-    by_name = _vars_by_name(tree)
+    by_name = vars_by_name(tree)
     assert "data" not in by_name["grid"], "2-D data var should stay lazy (no `data` key)"
 
 
@@ -113,7 +110,7 @@ def test_eager_data_round_trip(time_zarr_store: Path) -> None:
     decoding yet). CF decoding happens later in the Python entrypoint
     via `decode_cf_variables`."""
     tree = open_datatree(str(time_zarr_store))
-    by_name = _vars_by_name(tree)
+    by_name = vars_by_name(tree)
     ref_undecoded = xr.open_zarr(time_zarr_store, consolidated=False, decode_times=False)
 
     np.testing.assert_array_equal(by_name["x"]["data"], ref_undecoded["x"].values)
@@ -137,7 +134,7 @@ def test_oversized_coord_stays_lazy(tmp_path: Path) -> None:
     arr[:] = np.zeros((big_n,), dtype=np.int8)
 
     tree = open_datatree(str(path))
-    by_name = _vars_by_name(tree)
+    by_name = vars_by_name(tree)
     assert "data" not in by_name["big"], (
         f"vars with > 1 M elements should stay lazy; got `data` of shape "
         f"{by_name['big']['data'].shape if 'data' in by_name['big'] else None}"

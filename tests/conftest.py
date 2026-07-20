@@ -44,6 +44,17 @@ def ktwx_repo_available() -> bool:
 KTWX_SKIP_REASON = f"no icechunk repo at {KTWX_PATH} (set RUSTYTREE_SKIP_KTWX=1 to skip explicitly)"
 
 
+def vars_by_name(tree: dict, group: str = "/") -> dict[str, dict]:
+    """Index one walked group's vars by name.
+
+    The walk returns `vars` as a list; nearly every test wants it keyed.
+    Lives here because the var-dict shape has already changed once (when
+    `data` was added for eager fetch) and three modules were carrying
+    their own copy.
+    """
+    return {var["name"]: var for var in tree[group]["vars"]}
+
+
 def _write_tiny_layout(root: zarr.Group) -> None:
     """Write the canonical 2-array layout used by both fixtures.
 

@@ -135,8 +135,15 @@ impl ZarrsArrayHandle {
 
     /// Read a hyperrectangular slab of the array.
     ///
-    /// `ranges` is a list of `(start, stop)` tuples — one per
-    /// dimension, exclusive stop, matching Python `slice` semantics.
+    /// `ranges` is a list of already-normalised half-open `(start, stop)`
+    /// tuples, one per dimension, satisfying
+    /// `0 <= start <= stop <= shape[i]`. Translating Python slice
+    /// semantics — reversed, negative or out-of-range endpoints — is the
+    /// caller's job; `RustyBackendArray._raw_indexing_method` is where
+    /// that happens. A reversed range is rejected here rather than
+    /// silently read as empty, so a malformed range from any other caller
+    /// still surfaces.
+    ///
     /// Returns a 1-D `NumPy` array of length `prod(stop_i - start_i)`;
     /// the Python adapter (`RustyBackendArray`) reshapes to the
     /// requested shape.
@@ -179,6 +186,13 @@ impl ZarrsArrayHandle {
                 )));
             }
         }
+
+        // An empty selection (any axis with `start == stop`, e.g.
+        // `isel(time=slice(1, 1))`) has nothing to fetch. Skipping the
+        // read matters: chunk alignment below would expand it to a whole
+        // chunk and pull that off the network — a full round-trip on S3 —
+        // only to slice everything back out again.
+        let is_empty = ranges.iter().any(|(start, stop)| start == stop);
 
         // Align the requested ranges to chunk-grid boundaries so each
         // chunk read goes through zarrs's `async_retrieve_chunk_opt`
@@ -229,11 +243,18 @@ impl ZarrsArrayHandle {
         let runtime = self.runtime.clone();
 
         for_each_supported_dtype!(self.array.data_type(), T => {
-            let elements: Vec<T> = py.detach(|| -> PyResult<Vec<T>> {
-                runtime
-                    .block_on(array.async_retrieve_array_subset::<Vec<T>>(&subset))
-                    .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
-            })?;
+            // The empty case skips the read but still flows through this
+            // one dispatch, so the returned array carries the same dtype
+            // a non-empty read would, from a single code path.
+            let elements: Vec<T> = if is_empty {
+                Vec::new()
+            } else {
+                py.detach(|| -> PyResult<Vec<T>> {
+                    runtime
+                        .block_on(array.async_retrieve_array_subset::<Vec<T>>(&subset))
+                        .map_err(|err| PyValueError::new_err(format!("zarrs read failed: {err}")))
+                })?
+            };
             let sliced = slice_nd(
                 elements,
                 &aligned_shape,
@@ -303,23 +324,20 @@ fn slice_nd<T: Copy>(
     for i in (0..n.saturating_sub(1)).rev() {
         src_strides[i] = src_strides[i + 1] * aligned_shape[i + 1];
     }
-    // Walk the output shape in row-major order, computing the source
-    // index for each destination element.
+    // Walk the output in row-major order, computing the source index for
+    // each destination element. Count-driven rather than exiting on a
+    // carry rollover, so an empty request is zero iterations and the loop
+    // is total by construction — that was #65.
     let mut idx = vec![0_usize; n];
-    loop {
+    for _ in 0..total_out {
         let mut src = 0_usize;
         for i in 0..n {
             src += (offsets[i] + idx[i]) * src_strides[i];
         }
         out.push(elements[src]);
-        // Increment the multidim index in row-major (last-axis-first)
-        // order. Loop exits when the carry rolls past axis 0.
-        let mut axis = n;
-        loop {
-            if axis == 0 {
-                return out;
-            }
-            axis -= 1;
+        // Increment the multidim index, last axis first, carrying into
+        // the next axis up when one wraps.
+        for axis in (0..n).rev() {
             idx[axis] += 1;
             if idx[axis] < out_shape[axis] {
                 break;
@@ -327,6 +345,7 @@ fn slice_nd<T: Copy>(
             idx[axis] = 0;
         }
     }
+    out
 }
 
 /// Reconstruct a `ZarrsArrayHandle` from its pickled state (see
@@ -416,9 +435,91 @@ pub(crate) fn zarrs_dtype_zarr_name(dtype: &DataType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::zarrs_dtype_to_numpy_str;
+    use super::{slice_nd, zarrs_dtype_to_numpy_str};
     use crate::dtype_dispatch::for_each_supported_dtype;
     use zarrs::array::{DataType, data_type};
+
+    /// Regression tests for #65: the walk used to push an element before
+    /// it could test the bounds.
+    ///
+    /// `read_subset` now skips the read for an empty selection, so these
+    /// arrangements are the ones it *would* build absent that skip. They
+    /// are kept deliberately: `slice_nd` is a `pub(crate)` helper whose
+    /// totality should not depend on one caller's fast path, and the
+    /// failure mode was an out-of-bounds panic.
+    mod empty_selection {
+        use super::slice_nd;
+
+        /// `read_subset([(1, 1)])` on shape 12 / chunks 4.
+        #[test]
+        fn at_unaligned_offset_yields_no_elements() {
+            assert_eq!(
+                slice_nd(vec![0.0, 1.0, 2.0, 3.0], &[4], &[1], &[0]),
+                Vec::<f64>::new()
+            );
+        }
+
+        /// `read_subset([(13, 13)])` on shape 13 / chunks 4 — the
+        /// arrangement that panicked rather than returning a wrong length.
+        #[test]
+        fn at_end_of_clamped_ragged_chunk_yields_no_elements() {
+            assert_eq!(slice_nd(vec![12.0], &[1], &[1], &[0]), Vec::<f64>::new());
+        }
+
+        /// Correct even before the fix, via the identity fast path.
+        #[test]
+        fn at_chunk_aligned_offset_yields_no_elements() {
+            assert_eq!(
+                slice_nd(Vec::<f64>::new(), &[0], &[0], &[0]),
+                Vec::<f64>::new()
+            );
+        }
+
+        #[test]
+        fn with_one_empty_axis_of_two_yields_no_elements() {
+            assert_eq!(
+                slice_nd(vec![0.0, 1.0, 2.0, 3.0], &[2, 2], &[0, 1], &[2, 0]),
+                Vec::<f64>::new()
+            );
+        }
+
+        #[test]
+        fn with_every_axis_empty_yields_no_elements() {
+            assert_eq!(
+                slice_nd(vec![0.0, 1.0, 2.0, 3.0], &[2, 2], &[1, 1], &[0, 0]),
+                Vec::<f64>::new()
+            );
+        }
+    }
+
+    /// A 0-D scalar has an *empty* `out_shape` — no axes — which is not
+    /// the same as a zero-extent axis, and must still yield one element.
+    /// It reaches the walk with `total_out == 1`, so it no longer depends
+    /// on the identity fast path intercepting it first.
+    #[test]
+    fn scalar_read_still_yields_one_element() {
+        assert_eq!(slice_nd(vec![7.0_f64], &[], &[], &[]), vec![7.0]);
+    }
+
+    /// Stride arithmetic beyond 2-D. The suite otherwise only reads 3-D
+    /// arrays whole, which takes the identity fast path and never
+    /// exercises the per-axis strides.
+    #[test]
+    fn slices_a_subrectangle_out_of_a_3d_buffer() {
+        let buf: Vec<i32> = (0..24).collect();
+        assert_eq!(
+            slice_nd(buf, &[2, 3, 4], &[1, 1, 1], &[1, 2, 2]),
+            vec![17, 18, 21, 22]
+        );
+    }
+
+    /// Non-empty slicing must be unaffected by the rewrite.
+    #[test]
+    fn slices_a_subrectangle_out_of_a_2d_buffer() {
+        // 3x4 row-major buffer, take rows 1..3 x cols 1..3.
+        let buf: Vec<i32> = (0..12).collect();
+        assert_eq!(slice_nd(buf, &[3, 4], &[1, 1], &[2, 2]), vec![5, 6, 9, 10]);
+    }
 
     /// zarrs 0.22's `DataType` was an enum, so the compiler checked the
     /// dtype dispatch for us. In 0.23 it is a newtype over
