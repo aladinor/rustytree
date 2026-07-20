@@ -57,6 +57,16 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   `runs.using`; the artifact actions only moved to Node 24 at v6/v7, so a naïve
   bump to v5 would still have been Node 20). No workflow behaviour change.
 
+### Fixed
+
+- Tests: the two opt-in KTWX smoke tests now skip when the directory exists but
+  holds no icechunk repository ([#60]). The guard tested `KTWX_PATH.exists()`,
+  so an empty leftover directory failed the guard's purpose and the tests
+  errored with `KeyError: group / not found in store` instead of skipping. The
+  shared `ktwx_repo_available()` helper in `tests/conftest.py` now mirrors
+  rustytree's own detector (`looks_like_icechunk_repo`): a `repo` manifest file
+  plus a `snapshots/` directory.
+
 ### Security
 
 - Bump `pyo3` and `numpy` 0.28 → 0.29 ([#61]) to fix a **high**-severity

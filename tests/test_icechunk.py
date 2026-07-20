@@ -20,6 +20,7 @@ from pathlib import Path
 
 import icechunk
 import pytest
+from conftest import KTWX_PATH, KTWX_SKIP_REASON, ktwx_repo_available
 
 from rustytree._rustytree import open_datatree
 
@@ -87,13 +88,7 @@ def test_unknown_branch_raises(tiny_icechunk_repo: Path) -> None:
         open_datatree(str(tiny_icechunk_repo), branch="does-not-exist")
 
 
-KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
-
-
-@pytest.mark.skipif(
-    not KTWX_PATH.exists() or os.environ.get("RUSTYTREE_SKIP_KTWX") == "1",
-    reason="KTWX repo not present (set RUSTYTREE_SKIP_KTWX=1 to skip explicitly)",
-)
+@pytest.mark.skipif(not ktwx_repo_available(), reason=KTWX_SKIP_REASON)
 def test_open_ktwx_recursive_walk() -> None:
     """Smoke test against the user's actual radar icechunk repo.
 

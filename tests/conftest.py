@@ -8,12 +8,40 @@ shared between them.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import icechunk
 import numpy as np
 import pytest
 import zarr
+
+# ---- KTWX opt-in smoke repo ----------------------------------------
+#
+# A few tests smoke rustytree against a real radar icechunk repo on the
+# maintainer's machine. They must skip cleanly everywhere else — including
+# CI, and including the case where the directory exists but is empty.
+
+KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
+
+
+def ktwx_repo_available() -> bool:
+    """Whether `KTWX_PATH` holds a usable icechunk repository.
+
+    Mirrors rustytree's own detector (`looks_like_icechunk_repo` in
+    `src/icechunk_store.rs`): a `repo` manifest file plus a `snapshots/`
+    directory. Testing `Path.exists()` alone is not enough — an empty
+    leftover directory passes that check, so the guard doesn't fire and
+    the test fails with `KeyError: group / not found in store` instead of
+    skipping.
+    """
+    if os.environ.get("RUSTYTREE_SKIP_KTWX") == "1":
+        return False
+    return (KTWX_PATH / "repo").is_file() and (KTWX_PATH / "snapshots").is_dir()
+
+
+#: Reason string shared by the KTWX `skipif` marks.
+KTWX_SKIP_REASON = f"no icechunk repo at {KTWX_PATH} (set RUSTYTREE_SKIP_KTWX=1 to skip explicitly)"
 
 
 def _write_tiny_layout(root: zarr.Group) -> None:

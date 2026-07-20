@@ -14,12 +14,12 @@ These exercise the path that real users hit:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
+from conftest import KTWX_PATH, KTWX_SKIP_REASON, ktwx_repo_available
 
 
 # ---- vanilla Zarr v3 ----
@@ -967,13 +967,8 @@ def test_subtree_via_group_kwarg_default_unchanged_paths(
 
 # ---- KTWX smoke (network-free) ----
 
-KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
 
-
-@pytest.mark.skipif(
-    not KTWX_PATH.exists() or os.environ.get("RUSTYTREE_SKIP_KTWX") == "1",
-    reason="KTWX repo not present",
-)
+@pytest.mark.skipif(not ktwx_repo_available(), reason=KTWX_SKIP_REASON)
 def test_ktwx_open_via_engine_returns_datatree() -> None:
     """Smoke test that engine="rustytree" works end-to-end on the user's
     actual radar repo. We don't assert on contents (schema may evolve);
