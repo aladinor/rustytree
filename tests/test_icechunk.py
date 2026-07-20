@@ -20,6 +20,7 @@ from pathlib import Path
 
 import icechunk
 import pytest
+from conftest import KTWX_PATH, KTWX_SKIP_REASON, ktwx_repo_available
 
 from rustytree._rustytree import open_datatree
 
@@ -51,10 +52,17 @@ def test_var_metadata_matches_vanilla(tiny_icechunk_repo: Path) -> None:
     assert temp["dims"] == ["lat", "lon"]
     assert temp["shape"] == [4, 3]
     assert temp["attrs"] == {"units": "K"}
+    # dtype matters here specifically: the icechunk snapshot path builds
+    # `VarMeta` in `build_var_meta_from_snapshot`, a *separate* site from
+    # the vanilla walk's `open_array_meta`. Without this the snapshot
+    # site could regress to zarrs's `Display` (`"float64 / <f8"`, which
+    # numpy rejects) with the whole suite still green.
+    assert temp["dtype"] == "float64"
 
     mask = by_name["mask"]
     assert mask["dims"] == ["lat", "lon"]
     assert mask["shape"] == [4, 3]
+    assert mask["dtype"] == "int8"
 
 
 def test_explicit_main_branch_is_default(tiny_icechunk_repo: Path) -> None:
@@ -80,13 +88,7 @@ def test_unknown_branch_raises(tiny_icechunk_repo: Path) -> None:
         open_datatree(str(tiny_icechunk_repo), branch="does-not-exist")
 
 
-KTWX_PATH = Path("/home/alfonso-ladino/python/raw2zarr/zarr/KTWX")
-
-
-@pytest.mark.skipif(
-    not KTWX_PATH.exists() or os.environ.get("RUSTYTREE_SKIP_KTWX") == "1",
-    reason="KTWX repo not present (set RUSTYTREE_SKIP_KTWX=1 to skip explicitly)",
-)
+@pytest.mark.skipif(not ktwx_repo_available(), reason=KTWX_SKIP_REASON)
 def test_open_ktwx_recursive_walk() -> None:
     """Smoke test against the user's actual radar icechunk repo.
 
