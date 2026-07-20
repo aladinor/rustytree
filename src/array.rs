@@ -242,8 +242,8 @@ impl ZarrsArrayHandle {
             );
             PyArray1::from_vec(py, sliced).into_bound_py_any(py)
         }, other => {
-            // Canonical name, not Debug/Display — see `zarrs_dtype_to_numpy_str`.
-            let name = zarrs_dtype_to_numpy_str(other);
+            // The store's own spelling — see `zarrs_dtype_zarr_name`.
+            let name = zarrs_dtype_zarr_name(other);
             Err(PyNotImplementedError::new_err(format!(
                 "rustytree: dtype {name} is not yet supported by ZarrsArrayHandle.read_subset; \
                  supported today: bool, int{{8,16,32,64}}, uint{{8,16,32,64}}, float{{32,64}}"
@@ -370,9 +370,11 @@ pub(crate) fn _reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<Zar
 ///
 /// The Zarr V3 name *is* the `NumPy` name for every dtype we support
 /// (`float64`, `int8`, `complex128`, …), so this is a lookup rather than
-/// a table — see `maps_every_named_dtype_to_its_numpy_name`, which pins
-/// all thirteen so an upstream alias rename can't slip through. rustytree
-/// is V3-only, so the V3 spelling is the one the metadata actually used.
+/// a table. `maps_every_named_dtype_to_its_numpy_name` pins the sixteen
+/// names we actually care about, so an upstream alias rename on any of
+/// those fails a test; zarrs registers ~45 dtypes in total and the rest
+/// pass through unchecked. rustytree is V3-only, so the V3 spelling is
+/// the one the metadata actually used.
 ///
 /// Deliberately does *not* use `Display`: zarrs 0.23 renders both Zarr
 /// spellings when they differ, so `float64` comes out as
@@ -394,6 +396,19 @@ pub(crate) fn zarrs_dtype_to_numpy_str(dtype: &DataType) -> String {
     if dtype.is::<data_type::BytesDataType>() {
         return "object".to_owned();
     }
+    zarrs_dtype_zarr_name(dtype)
+}
+
+/// The dtype's Zarr V3 name — the spelling that appears in the store's
+/// own `zarr.json`.
+///
+/// Use this for *diagnostics*, not for handing a dtype to `NumPy`.
+/// [`zarrs_dtype_to_numpy_str`] deliberately renames `bytes` to `object`,
+/// which is right for `np.dtype()` but wrong in an error message: a user
+/// whose metadata says `"variable_length_bytes"` should not be told that
+/// "dtype object is not supported" — that name appears nowhere in their
+/// store.
+pub(crate) fn zarrs_dtype_zarr_name(dtype: &DataType) -> String {
     dtype
         .name_v3()
         .map_or_else(|| dtype.to_string(), Cow::into_owned)
