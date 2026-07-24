@@ -29,12 +29,19 @@ class RustyBackendArray(BackendArray):
     into a sequence of basic reads.
     """
 
-    __slots__ = ("_handle", "shape", "dtype")
+    __slots__ = ("_handle", "shape", "dtype", "_read_dtype")
 
     def __init__(self, handle: Any) -> None:
         self._handle = handle
         self.shape = tuple(handle.shape)
+        # `dtype` is what the Variable declares; `_read_dtype` is what the read
+        # materialises. They differ only for variable-length `string`: declared
+        # `object`, read as numpy-2 `StringDType` — mirroring `engine="zarr"`,
+        # whose vlen-string variable is `object` while its values are
+        # `StringDType`. Declaring `object` is load-bearing: xarray's CF-decode
+        # flattens a `StringDType`-declared variable's values to `object`.
         self.dtype = np.dtype(handle.dtype)
+        self._read_dtype = np.dtype(handle.read_dtype)
 
     def __getitem__(self, key: indexing.ExplicitIndexer) -> np.ndarray:
         return indexing.explicit_indexing_adapter(
@@ -82,4 +89,11 @@ class RustyBackendArray(BackendArray):
         out = flat.reshape(out_shape)
         if squeeze_axes:
             out = out.squeeze(axis=tuple(squeeze_axes))
+        # String-like dtypes come back from Rust as an `object` array of Python
+        # `str` (the `numpy` crate can only build `object` arrays); cast to the
+        # dtype the read materialises — `StringDType` for `string`, `<U…` for
+        # `fixed_length_utf32`. Numeric reads already match `_read_dtype`, so the
+        # guard skips the (copying) `astype` for them.
+        if out.dtype != self._read_dtype:
+            out = out.astype(self._read_dtype)
         return out

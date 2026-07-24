@@ -19,7 +19,7 @@ use numpy::PyArray1;
 use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::{PyIndexError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyTuple};
+use pyo3::types::{PyBytes, PyString, PyTuple};
 use tokio::runtime::Handle;
 use zarrs::array::{Array, ArraySubset, DataType, data_type};
 use zarrs::plugin::ExtensionName;
@@ -60,6 +60,65 @@ impl ZarrsArrayHandle {
             spec,
         }
     }
+
+    /// Read a string-like dtype (`string` / `fixed_length_utf32`) as a 1-D numpy
+    /// `object` array of `str`, or `Ok(None)` when the dtype isn't string-like
+    /// (the numeric macro handles those). Both flavours reduce to a
+    /// `Vec<String>` from zarrs; the Python adapter casts the `object` array to
+    /// the declared `StringDType` / `<U…` dtype. Split out of `read_subset` so
+    /// that method stays within the line budget.
+    fn read_string_subset<'py>(
+        &self,
+        py: Python<'py>,
+        subset: &ArraySubset,
+        is_empty: bool,
+        aligned_shape: &[u64],
+        offsets: &[u64],
+        request_shape: &[u64],
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let dtype = self.array.data_type();
+        let is_string = dtype.is::<data_type::StringDataType>();
+        let is_utf32 = dtype.is::<data_type::FixedLengthUTF32DataType>();
+        if !is_string && !is_utf32 {
+            return Ok(None);
+        }
+        let strings: Vec<String> = if is_empty {
+            Vec::new()
+        } else {
+            let array = self.array.clone();
+            let runtime = self.runtime.clone();
+            py.detach(|| -> PyResult<Vec<String>> {
+                let read_err = |err| PyValueError::new_err(format!("zarrs read failed: {err}"));
+                if is_string {
+                    runtime
+                        .block_on(array.async_retrieve_array_subset::<Vec<String>>(subset))
+                        .map_err(read_err)
+                } else {
+                    // zarrs decodes `fixed_length_utf32` into one `Vec<char>`
+                    // per element (trailing U+0000 padding trimmed). Known
+                    // limitation: Rust `char` can't hold lone surrogate code
+                    // points (U+D800–U+DFFF), so zarrs drops them — unlike numpy
+                    // `<U`, which keeps the raw bytes. That diverges from
+                    // `engine="zarr"` only for malformed Unicode; valid content
+                    // round-trips exactly (see `test_utf32_lone_surrogate_dropped`).
+                    let rows: Vec<Vec<char>> = runtime
+                        .block_on(array.async_retrieve_array_subset::<Vec<Vec<char>>>(subset))
+                        .map_err(read_err)?;
+                    Ok(rows
+                        .into_iter()
+                        .map(|chars| chars.into_iter().collect())
+                        .collect())
+                }
+            })?
+        };
+        Ok(Some(strings_to_object_pyarray(
+            py,
+            strings,
+            aligned_shape,
+            offsets,
+            request_shape,
+        )?))
+    }
 }
 
 #[pymethods]
@@ -97,6 +156,15 @@ impl ZarrsArrayHandle {
     #[getter]
     fn dtype(&self) -> String {
         zarrs_dtype_to_numpy_str(self.array.data_type())
+    }
+
+    /// The `NumPy` dtype the read materialises, which `RustyBackendArray` casts
+    /// the returned buffer to. Differs from [`Self::dtype`] only for vlen
+    /// `string` (declared `object`, read as numpy-2 `StringDType`), mirroring
+    /// `engine="zarr"`. See [`zarrs_dtype_read_numpy_str`].
+    #[getter]
+    fn read_dtype(&self) -> String {
+        zarrs_dtype_read_numpy_str(self.array.data_type())
     }
 
     /// Pickle support (issue #44): make the handle survive a `dask.distributed`
@@ -239,6 +307,20 @@ impl ZarrsArrayHandle {
         // array back to Python. The Python adapter reshapes; doing it
         // here would force every dtype to materialise an ndarray crate
         // type, which costs an extra dependency for no benefit.
+        // String-like dtypes (`string`, `fixed_length_utf32`) are handled ahead
+        // of the numeric `for_each_supported_dtype!` macro (which is shared with
+        // the eager-fetch path and stays numeric-only).
+        if let Some(result) = self.read_string_subset(
+            py,
+            &subset,
+            is_empty,
+            &aligned_shape,
+            &request_offsets_in_aligned,
+            &request_shape,
+        )? {
+            return Ok(result);
+        }
+
         let array = self.array.clone();
         let runtime = self.runtime.clone();
 
@@ -287,7 +369,11 @@ impl ZarrsArrayHandle {
 /// extract a contiguous-in-the-trailing-axes sub-rectangle starting at
 /// `offsets` with shape `out_shape`. Used by `read_subset` to slice a
 /// chunk-aligned read down to the actually-requested ranges.
-fn slice_nd<T: Copy>(
+// `T: Clone` (not `Copy`) so the same slicer serves the numeric arms and the
+// `String` buffers produced by the string-like arms. Zero-cost for numeric `T`:
+// the identity fast-path still moves `elements`, and cloning a `Copy` value is
+// a bit copy.
+fn slice_nd<T: Clone>(
     elements: Vec<T>,
     aligned_shape: &[u64],
     offsets: &[u64],
@@ -334,7 +420,7 @@ fn slice_nd<T: Copy>(
         for i in 0..n {
             src += (offsets[i] + idx[i]) * src_strides[i];
         }
-        out.push(elements[src]);
+        out.push(elements[src].clone());
         // Increment the multidim index, last axis first, carrying into
         // the next axis up when one wraps.
         for axis in (0..n).rev() {
@@ -346,6 +432,32 @@ fn slice_nd<T: Copy>(
         }
     }
     out
+}
+
+/// Slice a flat `Vec<String>` down to the requested hyperrectangle and hand it
+/// back as a 1-D numpy `object` array of `PyString`s.
+///
+/// Both string-like dtypes (`string`, `fixed_length_utf32`) funnel through
+/// here: the `numpy` crate can only build `object` arrays, so the Python
+/// adapter (`RustyBackendArray`) reshapes and casts the result to the declared
+/// `StringDType` / `<U…` dtype.
+fn strings_to_object_pyarray<'py>(
+    py: Python<'py>,
+    strings: Vec<String>,
+    aligned_shape: &[u64],
+    offsets: &[u64],
+    request_shape: &[u64],
+) -> PyResult<Bound<'py, PyAny>> {
+    let sliced = slice_nd(strings, aligned_shape, offsets, request_shape);
+    // `from_slice` (not `from_vec`): for object dtype it clones each ref into a
+    // numpy-owned buffer, so numpy and the local `objs` Vec own their
+    // references independently — no double-decref hazard if the array is later
+    // mutated. One incref/element, negligible at coord/scalar sizes.
+    let objs: Vec<Py<PyAny>> = sliced
+        .into_iter()
+        .map(|s| PyString::new(py, &s).into_any().unbind())
+        .collect();
+    PyArray1::from_slice(py, &objs).into_bound_py_any(py)
 }
 
 /// Reconstruct a `ZarrsArrayHandle` from its pickled state (see
@@ -401,21 +513,43 @@ pub(crate) fn _reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<Zar
 ///
 /// Two behaviours worth knowing:
 ///
-/// - `bytes` is special-cased *away* from its V3 name. `np.dtype("bytes")`
-///   is `|S0` (fixed-width, zero itemsize), so passing the V3 name through
-///   would silently mislabel a variable-length binary array rather than
-///   fail. zarr-python maps this dtype to `object`, so we do too.
-/// - Names we can't read and can't safely rename (`string`,
-///   `numpy.datetime64`, `fixed_length_utf32`, `r32`) pass through and
-///   make `np.dtype()` raise `TypeError` at open. That loud failure is
-///   intended. `string` is *not* folded in with `bytes`: zarr-python maps
-///   it to `StringDType`, not `object`, so calling it `object` would be a
-///   different lie rather than a fix.
+/// - `bytes` and variable-length `string` are both declared `object`.
+///   `np.dtype("bytes")` is `|S0` (fixed-width, zero itemsize), so passing the
+///   V3 name through would mislabel a vlen binary array. `string` is declared
+///   `object` *even though the read materialises numpy-2 `StringDType`*
+///   ([`zarrs_dtype_read_numpy_str`]): that mirrors `engine="zarr"`, whose
+///   variable is `object` while its values are `StringDType`. Declaring
+///   `object` up-front is load-bearing — xarray's CF-decode flattens a
+///   `StringDType`-declared variable's *values* to `object`, so declaring
+///   `object` is the only way to keep the values as `StringDType`.
+/// - `fixed_length_utf32` (numpy `<U…`) → `"<U{n}"`, fixed-width unicode with
+///   `n` = the element capacity in code points — matching what `engine="zarr"`
+///   materialises for that dtype (declared and read alike).
+/// - Names we can't read and can't safely rename (`numpy.datetime64`, `r32`, …)
+///   pass through and make `np.dtype()` raise `TypeError` at open. That loud
+///   failure is intended.
 pub(crate) fn zarrs_dtype_to_numpy_str(dtype: &DataType) -> String {
-    if dtype.is::<data_type::BytesDataType>() {
+    if dtype.is::<data_type::BytesDataType>() || dtype.is::<data_type::StringDataType>() {
         return "object".to_owned();
     }
+    if let Some(utf32) = dtype.downcast_ref::<data_type::FixedLengthUTF32DataType>() {
+        return format!("<U{}", utf32.capacity_code_points().get());
+    }
     zarrs_dtype_zarr_name(dtype)
+}
+
+/// The `NumPy` dtype the *read* materialises — what `RustyBackendArray` casts the
+/// returned buffer to. Identical to [`zarrs_dtype_to_numpy_str`] except for
+/// variable-length `string`, which reads back as numpy-2 `StringDType` (`"T"`)
+/// while being *declared* `object`. This declared/read split is exactly how
+/// `engine="zarr"` surfaces vlen strings on numpy≥2 (numpy collapses a 0-D
+/// `StringDType` to `<U` by itself, matching zarr's scalar behaviour). This is
+/// why the package floor is `numpy>=2.0`: `StringDType` did not exist before.
+pub(crate) fn zarrs_dtype_read_numpy_str(dtype: &DataType) -> String {
+    if dtype.is::<data_type::StringDataType>() {
+        return "T".to_owned();
+    }
+    zarrs_dtype_to_numpy_str(dtype)
 }
 
 /// The dtype's Zarr V3 name — the spelling that appears in the store's
@@ -435,7 +569,7 @@ pub(crate) fn zarrs_dtype_zarr_name(dtype: &DataType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{slice_nd, zarrs_dtype_to_numpy_str};
+    use super::{slice_nd, zarrs_dtype_read_numpy_str, zarrs_dtype_to_numpy_str};
     use crate::dtype_dispatch::for_each_supported_dtype;
     use zarrs::array::{DataType, data_type};
 
@@ -544,17 +678,22 @@ mod tests {
             (data_type::float64(), "float64"),
             (data_type::complex64(), "complex64"),
             (data_type::complex128(), "complex128"),
-            // Not readable, but must still be *named* safely:
             // `np.dtype("bytes")` is `|S0`, so the V3 name must not pass
-            // through. `string` deliberately does pass through — see
-            // `zarrs_dtype_to_numpy_str`.
+            // through; both `bytes` and vlen `string` are *declared* `object`
+            // (`string`'s values still read back as `StringDType` — see
+            // `zarrs_dtype_read_numpy_str`).
             (data_type::bytes(), "object"),
-            (data_type::string(), "string"),
+            (data_type::string(), "object"),
             // Readable-name-only fallthrough that numpy does accept.
             (data_type::float16(), "float16"),
         ] {
             assert_eq!(zarrs_dtype_to_numpy_str(&dtype), expected);
         }
+        // vlen `string` is *declared* `object` but *read* as numpy-2
+        // `StringDType` ("T"); every other dtype's read name equals its
+        // declared name.
+        assert_eq!(zarrs_dtype_read_numpy_str(&data_type::string()), "T");
+        assert_eq!(zarrs_dtype_read_numpy_str(&data_type::float64()), "float64");
     }
 
     /// The macro's marker→primitive pairings, pinned the same way. A

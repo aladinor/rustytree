@@ -57,7 +57,41 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   `runs.using`; the artifact actions only moved to Node 24 at v6/v7, so a naïve
   bump to v5 would still have been Node 20). No workflow behaviour change.
 
+- Raise the NumPy floor `numpy>=1.24` → `numpy>=2.0` ([#71]). Variable-length
+  `string` arrays are surfaced as numpy 2's variable-width `StringDType`
+  (`np.dtype("T")`), which did not exist before 2.0. rustytree's other pins
+  (`zarr>=3`, recent `xarray`) already track numpy 2, so this only makes an
+  existing expectation explicit.
+
 ### Fixed
+
+- Zarr v3 string arrays now open and read instead of crashing ([#71], fixes
+  #70). Both v3 string flavours failed before: a variable-length `string` array
+  raised `TypeError: data type 'string' not understood` (its name reached
+  `np.dtype()` unmapped), and a `fixed_length_utf32` array (numpy `<U…`,
+  xarray's default `str` encoding) raised `NotImplementedError` at read. This
+  became a production regression when raw2zarr's FM301 retrofit added
+  `sweep_mode`/`prt_mode`/`follow_mode` as vlen-`string` scalars to the KLOT
+  eager store and the Serbian OSN stores, forcing consumers to fall back to the
+  slower `engine="zarr"`. rustytree now mirrors `engine="zarr"` for both
+  flavours — `xr.testing.assert_identical` holds against it for all
+  valid-Unicode content (2-D chunking, interior NULs, non-BMP code points,
+  empty strings, and unwritten-chunk fill values all included):
+  - **vlen `string`** is *declared* `object` but its values *materialise* as
+    numpy-2 `StringDType`. That declared/read split is exactly what
+    `engine="zarr"` produces: xarray's CF-decode flattens a
+    `StringDType`-declared variable's values back to `object`, so declaring
+    `object` up-front is the only way to keep `StringDType` values. The `numpy`
+    crate can only build `object` arrays across the FFI boundary, so the read
+    returns `object` and `RustyBackendArray` casts to the dtype the new
+    `ZarrsArrayHandle.read_dtype` reports.
+  - **`fixed_length_utf32`** → fixed-width `<U{n}` (`n` code points). zarrs 0.23
+    opens this dtype (0.22 could not); rustytree decodes the native-endian
+    UTF-32 to `str` and builds the `<U` array. One documented divergence: lone
+    surrogate code points (U+D800–U+DFFF, malformed Unicode) are dropped rather
+    than preserved, because the decode goes through Rust `char`.
+  - `slice_nd`'s bound relaxed from `T: Copy` to `T: Clone` so the same slicer
+    serves the `String` buffers; zero-cost for the numeric arms.
 
 - An empty selection no longer returns a stray element or panics ([#68], fixes
   #65). `isel(time=slice(1, 1))` and friends returned one bogus element whenever
@@ -833,3 +867,4 @@ below.
 [#60]: https://github.com/aladinor/rustytree/pull/60
 [#61]: https://github.com/aladinor/rustytree/pull/61
 [#68]: https://github.com/aladinor/rustytree/pull/68
+[#71]: https://github.com/aladinor/rustytree/pull/71
