@@ -31,7 +31,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy>=1.24",
+    # numpy>=2.0: variable-length `string` arrays are surfaced as numpy 2's
+    # `StringDType` (`np.dtype("T")`), which did not exist before 2.0 (#70).
+    "numpy>=2.0",
     "xarray>=2024.10",
 ]
 
