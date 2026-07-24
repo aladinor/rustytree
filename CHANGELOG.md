@@ -11,6 +11,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-24
+
 ### Added
 
 - Dependabot dependency automation ([#56]). A `.github/dependabot.yml` opens
@@ -62,6 +64,15 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   (`np.dtype("T")`), which did not exist before 2.0. rustytree's other pins
   (`zarr>=3`, recent `xarray`) already track numpy 2, so this only makes an
   existing expectation explicit.
+
+- Routine dependency and CI-action bumps via Dependabot ([#57], [#58], [#59],
+  [#64]) — the first batch after the automation ([#56]) landed. Cargo: `tokio`
+  1.52.3 → 1.53.0, `futures` 0.3.32 → 0.3.33, `zarrs_storage` 0.4.3 → 0.4.4
+  ([#64]); `chrono` 0.4.44 → 0.4.45, `zarrs_icechunk` 0.5.0 → 0.5.1 ([#59]);
+  `cmov` 0.5.3 → 0.5.4 ([#57]). CI actions ([#58]): `actions/checkout` 5 → 7,
+  `astral-sh/setup-uv` 4 → 7, `actions/upload-artifact` 6 → 7, and
+  `actions/download-artifact` 7 → 8 — superseding the v5/v6/v7 pins the [#55]
+  entry above describes.
 
 ### Fixed
 
@@ -824,7 +835,8 @@ below.
   intentionally not normalized — relative-vs-absolute glob
   semantics differ in `PurePosixPath.match`.
 
-[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/aladinor/rustytree/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aladinor/rustytree/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/aladinor/rustytree/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/aladinor/rustytree/compare/v0.1.0...v0.2.0
@@ -864,7 +876,11 @@ below.
 [#52]: https://github.com/aladinor/rustytree/pull/52
 [#55]: https://github.com/aladinor/rustytree/pull/55
 [#56]: https://github.com/aladinor/rustytree/pull/56
+[#57]: https://github.com/aladinor/rustytree/pull/57
+[#58]: https://github.com/aladinor/rustytree/pull/58
+[#59]: https://github.com/aladinor/rustytree/pull/59
 [#60]: https://github.com/aladinor/rustytree/pull/60
 [#61]: https://github.com/aladinor/rustytree/pull/61
+[#64]: https://github.com/aladinor/rustytree/pull/64
 [#68]: https://github.com/aladinor/rustytree/pull/68
 [#71]: https://github.com/aladinor/rustytree/pull/71

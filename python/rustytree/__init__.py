@@ -8,4 +8,4 @@ plugin discovery) doesn't pay the cdylib load cost upfront.
 from rustytree.backend import RustytreeBackendEntrypoint
 
 __all__ = ["RustytreeBackendEntrypoint"]
-__version__ = "0.3.0"
+__version__ = "0.4.0"
