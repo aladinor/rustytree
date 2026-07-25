@@ -60,7 +60,7 @@ serde = { version = "1", features = ["derive"] }
 # crc32c) come from zarrs's default features, which we keep enabled.
 zarrs = { version = "0.23", features = ["async", "zlib"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
-zarrs_object_store = { version = "0.6", features = ["fs", "aws"] }
+zarrs_object_store = { version = "0.7", features = ["fs", "aws"] }
 serde_json = "1"
 
 # icechunk = transactional Zarr v3 storage layer. `zarrs_icechunk` wraps an
