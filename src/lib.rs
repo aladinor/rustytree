@@ -35,7 +35,7 @@ mod walk;
 
 use std::sync::Arc;
 
-use crate::array::ZarrsArrayHandle;
+use crate::array::{ZarrsArrayHandle, strings_to_pyobject_array};
 use crate::error::Result;
 use crate::node::{EagerElements, NodeData, VarMeta};
 use crate::store::ReopenSpec;
@@ -268,7 +268,7 @@ fn eager_to_pyarray<'py>(
     // 1-D `PyArray1::from_slice` materialises the data; numpy's
     // `reshape` then gives us the natural N-D view that xarray expects
     // when constructing a `Variable` with this as `data`.
-    let flat = match eager {
+    let flat: Bound<'py, PyAny> = match eager {
         EagerElements::Bool(v) => PyArray1::from_slice(py, v).into_any(),
         EagerElements::I8(v) => PyArray1::from_slice(py, v).into_any(),
         EagerElements::I16(v) => PyArray1::from_slice(py, v).into_any(),
@@ -280,6 +280,10 @@ fn eager_to_pyarray<'py>(
         EagerElements::U64(v) => PyArray1::from_slice(py, v).into_any(),
         EagerElements::F32(v) => PyArray1::from_slice(py, v).into_any(),
         EagerElements::F64(v) => PyArray1::from_slice(py, v).into_any(),
+        // `object` array of `PyString`s — reshape below is what gives it
+        // the N-D shape; `backend.py` casts to the declared read dtype
+        // (`StringDType`) the same way it already does for lazy string reads.
+        EagerElements::Str(v) => strings_to_pyobject_array(py, v)?,
     };
     let shape_tuple = PyTuple::new(py, shape)?;
     flat.call_method1("reshape", (shape_tuple,))

@@ -21,7 +21,9 @@ use zarrs::array::Array;
 use zarrs_storage::AsyncReadableListableStorageTraits;
 
 /// Element-typed eager-fetched array contents. One variant per dtype that
-/// `ZarrsArrayHandle::read_subset` already supports.
+/// `ZarrsArrayHandle::read_subset` already supports, plus `Str` for vlen
+/// `string` (handled outside `for_each_supported_dtype!`, same split as the
+/// lazy `read_subset` path).
 pub(crate) enum EagerElements {
     Bool(Vec<bool>),
     I8(Vec<i8>),
@@ -34,6 +36,7 @@ pub(crate) enum EagerElements {
     U64(Vec<u64>),
     F32(Vec<f32>),
     F64(Vec<f64>),
+    Str(Vec<String>),
 }
 
 /// Metadata snapshot for a single array within a group, plus a live

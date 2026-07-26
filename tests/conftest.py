@@ -55,6 +55,28 @@ def vars_by_name(tree: dict, group: str = "/") -> dict[str, dict]:
     return {var["name"]: var for var in tree[group]["vars"]}
 
 
+@pytest.fixture
+def track_raw_indexing_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Record every `(shape, dtype)` seen by
+    `RustyBackendArray._raw_indexing_method`, so a test can assert an
+    eager-fetched var never round-trips through the lazy backend. Shared by
+    the numeric (`test_eager_fetch.py`) and string (`test_string_arrays.py`)
+    "no lazy read" regression tests, which were previously duplicating this
+    monkeypatch setup verbatim.
+    """
+    from rustytree._array import RustyBackendArray
+
+    touched: list[tuple] = []
+    original = RustyBackendArray._raw_indexing_method
+
+    def tracking(self: RustyBackendArray, key: tuple) -> np.ndarray:
+        touched.append((self.shape, self.dtype))
+        return original(self, key)
+
+    monkeypatch.setattr(RustyBackendArray, "_raw_indexing_method", tracking)
+    return touched
+
+
 def _write_tiny_layout(root: zarr.Group) -> None:
     """Write the canonical 2-array layout used by both fixtures.
 

@@ -449,13 +449,25 @@ fn strings_to_object_pyarray<'py>(
     request_shape: &[u64],
 ) -> PyResult<Bound<'py, PyAny>> {
     let sliced = slice_nd(strings, aligned_shape, offsets, request_shape);
+    strings_to_pyobject_array(py, &sliced)
+}
+
+/// Build a flat 1-D numpy `object` array of `PyString`s from a string slice.
+/// Shared tail of [`strings_to_object_pyarray`] (the lazy, possibly-sliced
+/// read path) and Phase C's eager-fetch path (`lib.rs::eager_to_pyarray`,
+/// which reads the whole array and reshapes separately, so needs no slicing
+/// here).
+pub(crate) fn strings_to_pyobject_array<'py>(
+    py: Python<'py>,
+    strings: &[String],
+) -> PyResult<Bound<'py, PyAny>> {
     // `from_slice` (not `from_vec`): for object dtype it clones each ref into a
     // numpy-owned buffer, so numpy and the local `objs` Vec own their
     // references independently — no double-decref hazard if the array is later
     // mutated. One incref/element, negligible at coord/scalar sizes.
-    let objs: Vec<Py<PyAny>> = sliced
-        .into_iter()
-        .map(|s| PyString::new(py, &s).into_any().unbind())
+    let objs: Vec<Py<PyAny>> = strings
+        .iter()
+        .map(|s| PyString::new(py, s).into_any().unbind())
         .collect();
     PyArray1::from_slice(py, &objs).into_bound_py_any(py)
 }
