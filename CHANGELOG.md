@@ -11,6 +11,22 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Eager-fetch small `object`-dtype (vlen `string`) scalars and self-named
+  1-D coords during the walk's Phase C ([#77]). `xr.open_datatree(engine=
+  "rustytree")` was paying one serial lazy read per `object`-dtype variable
+  at open time — xarray's `_contains_datetime_like_objects` samples every
+  such variable to rule out `cftime.datetime`, independent of the existing
+  CF-time-like/dim-coord triggers Phase C already covers. Extends the walk's
+  parallel pre-fetch to cover this case (bounded by a 4096-element count cap
+  and an 8 MiB total-byte-size cap, since per-element size is unbounded for
+  strings unlike the existing fixed-width numeric cap), and adds the
+  matching `object` → declared-read-dtype cast on the eager path in
+  `backend.py` (mirroring the lazy path's existing cast from #71). Scoped to
+  scalars and self-named 1-D coords only, so an ordinary small string data
+  variable doesn't lose its dask laziness just because it's small.
+
 ## [0.4.0] - 2026-07-24
 
 ### Added
@@ -884,3 +900,4 @@ below.
 [#64]: https://github.com/aladinor/rustytree/pull/64
 [#68]: https://github.com/aladinor/rustytree/pull/68
 [#71]: https://github.com/aladinor/rustytree/pull/71
+[#77]: https://github.com/aladinor/rustytree/pull/77

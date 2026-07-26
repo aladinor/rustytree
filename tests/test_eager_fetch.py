@@ -28,8 +28,6 @@ import pytest
 from conftest import vars_by_name
 import xarray as xr
 import zarr
-
-from rustytree._array import RustyBackendArray
 from rustytree._rustytree import open_datatree
 
 
@@ -142,7 +140,7 @@ def test_oversized_coord_stays_lazy(tmp_path: Path) -> None:
 
 
 def test_engine_rustytree_does_not_trigger_reads_for_eager_vars(
-    time_zarr_store: Path, monkeypatch: pytest.MonkeyPatch
+    time_zarr_store: Path, track_raw_indexing_calls: list[tuple]
 ) -> None:
     """End-to-end: with eager-fetch in place, opening via
     `engine="rustytree"` must NOT route the eager-fetched vars through
@@ -151,15 +149,6 @@ def test_engine_rustytree_does_not_trigger_reads_for_eager_vars(
     `time`) are absent. Lazy vars (`grid`) may or may not get touched
     by xarray internals — we don't pin that.
     """
-    touched: list[tuple] = []
-    original = RustyBackendArray._raw_indexing_method
-
-    def tracking(self: RustyBackendArray, key: tuple) -> np.ndarray:
-        touched.append((self.shape, self.dtype.name))
-        return original(self, key)
-
-    monkeypatch.setattr(RustyBackendArray, "_raw_indexing_method", tracking)
-
     dt = xr.open_datatree(str(time_zarr_store), engine="rustytree")
 
     # Eager-fetch should have produced numpy data inline; both `x` and
@@ -170,7 +159,7 @@ def test_engine_rustytree_does_not_trigger_reads_for_eager_vars(
     # No lazy read should have happened against a 1-D float64 (`x`) or
     # 1-D int64 (`time`); only the 2-D float64 (`grid`) is allowed.
     eager_shapes = {((4,), "float64"), ((3,), "int64")}
-    for shape, dtype in touched:
-        assert (shape, dtype) not in eager_shapes, (
-            f"unexpected lazy read on eager-fetched var: shape={shape} dtype={dtype}"
+    for shape, dtype in track_raw_indexing_calls:
+        assert (shape, dtype.name) not in eager_shapes, (
+            f"unexpected lazy read on eager-fetched var: shape={shape} dtype={dtype.name}"
         )

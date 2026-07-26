@@ -22,6 +22,16 @@ import xarray as xr
 from conftest import KTWX_PATH, KTWX_SKIP_REASON, ktwx_repo_available
 
 
+class _Float32Handle:
+    """Stub `ZarrsArrayHandle` for tests exercising `get_variables` without
+    a real Rust-backed array: fixed at plain float32, matching the literal
+    `np.array(..., dtype="float32")` `data` these tests hardcode."""
+
+    chunks = (2,)
+    dtype = "float32"
+    read_dtype = "float32"
+
+
 # ---- vanilla Zarr v3 ----
 
 
@@ -172,10 +182,6 @@ def test_get_variables_decodes_base64_fill_value() -> None:
     # FillValueCoder encodes float fills as little-endian float64 bytes.
     b64 = base64.standard_b64encode(struct.pack("<d", fill)).decode()
 
-    class _StubHandle:
-        chunks = (2,)
-        dtype = "float32"
-
     node = {
         "attrs": {},
         "vars": [
@@ -183,7 +189,7 @@ def test_get_variables_decodes_base64_fill_value() -> None:
                 "name": "v",
                 "dims": ["x"],
                 "data": np.array([1.0, 2.0], dtype="float32"),
-                "handle": _StubHandle(),
+                "handle": _Float32Handle(),
                 "attrs": {"_FillValue": b64, "missing_value": fill},
             }
         ],
@@ -196,6 +202,32 @@ def test_get_variables_decodes_base64_fill_value() -> None:
     assert variables["v"].attrs["missing_value"] == fill
 
 
+def test_get_variables_numeric_eager_skips_astype_copy() -> None:
+    """A numeric eager var's `dtype == read_dtype` guard must be a true
+    no-op short-circuit, not an unconditional `.astype()` — the eager-string
+    cast (`data.astype(read_dtype)` when they differ) was added for vlen
+    string vars, but every numeric eager var takes the same code path and
+    must not pay a silent copy on every open."""
+    from rustytree.backend import _RustyDataStore
+
+    raw = np.array([1.0, 2.0], dtype="float32")
+    node = {
+        "attrs": {},
+        "vars": [
+            {
+                "name": "v",
+                "dims": ["x"],
+                "data": raw,
+                "handle": _Float32Handle(),
+                "attrs": {},
+            }
+        ],
+    }
+
+    variables = _RustyDataStore(node).get_variables()
+    assert variables["v"].data is raw, "dtype match should short-circuit, not copy"
+
+
 def _one_var_store(dtype: str, fill_value: object) -> dict:
     from rustytree.backend import _RustyDataStore
 
@@ -204,6 +236,14 @@ def _one_var_store(dtype: str, fill_value: object) -> dict:
 
     handle = _StubHandle()
     handle.dtype = dtype
+    # Independent of `dtype` (which only exercises `FillValueCoder.decode`'s
+    # dtype-keyed behavior — neither caller of this helper hits the base64
+    # path, so it's unused here today): the eager-var cast in
+    # `get_variables` compares `data.dtype` to `read_dtype`, and the literal
+    # `data` below is always float32. Matching it avoids silently exercising
+    # an unrelated `.astype()` cast (e.g. float32 -> complex64) as a side
+    # effect of parametrizing `dtype`.
+    handle.read_dtype = "float32"
     node = {
         "attrs": {},
         "vars": [

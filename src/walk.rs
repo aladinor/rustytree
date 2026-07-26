@@ -20,7 +20,7 @@ use icechunk::format::Path as IcePath;
 use icechunk::format::snapshot::NodeData as IceNodeData;
 use icechunk::session::Session;
 use tokio::sync::{RwLock, Semaphore};
-use zarrs::array::{Array, ArrayMetadata, ArraySubset};
+use zarrs::array::{Array, ArrayMetadata, ArraySubset, data_type};
 use zarrs::group::{Group, GroupCreateError, GroupMetadata};
 use zarrs_storage::{AsyncReadableListableStorage, AsyncReadableListableStorageTraits};
 
@@ -36,6 +36,26 @@ use crate::store::WalkSource;
 /// already a meaningful cold-cache cost we don't want to pay
 /// unconditionally during open. Tunable later if profiles say so.
 const EAGER_FETCH_MAX_ELEMENTS: u64 = 1 << 20;
+
+/// Coarse element-count cap for eager pre-fetching `object`-dtype (vlen
+/// `string`) vars. Unlike the fixed-width numeric cap above, per-element
+/// size for strings is unbounded, so this alone doesn't bound memory — see
+/// [`EAGER_FETCH_MAX_OBJECT_BYTES`], the real guard, enforced in
+/// `fetch_all_elements` after retrieval.
+const EAGER_FETCH_MAX_OBJECT_ELEMENTS: u64 = 4096;
+
+/// Real memory bound for eager-fetched `string` payloads: total UTF-8 bytes
+/// across all elements. A store could otherwise have <=
+/// `EAGER_FETCH_MAX_OBJECT_ELEMENTS` elements that are each multi-MB blobs.
+/// Checked in `fetch_all_elements` only *after* the full `Vec<String>` is
+/// already retrieved and resident (zarrs exposes no per-element size ahead
+/// of the read to check cheaper) — this bounds long-term residency (the var
+/// degrades to lazy, same contract as an unsupported dtype, rather than
+/// keeping an oversized buffer attached to the node), not the transient
+/// network/allocation cost of the one fetch that trips it. A store that
+/// pathologically matches this cap pays that cost once per open, then falls
+/// back to lazy for the rest of the session.
+const EAGER_FETCH_MAX_OBJECT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Map a `zarrs` group-open failure onto our error type.
 ///
@@ -586,16 +606,30 @@ async fn open_array_meta(
 ///   - **1-D self-named dim coord** (`var.dims == [var.name]`): xarray
 ///     promotes these into `Index` objects; index construction reads
 ///     the values, which would otherwise hit our lazy backend
-///     once-per-coord-per-node.
-///   - **CF time-like** (`attrs["units"]` is a string containing
-///     `" since "`): xarray's `_decode_cf_datetime_dtype` peeks the
-///     first and last element of every such variable to infer dtype.
-///     That's 2 RTTs/var × N vars × N nodes serialised through our
-///     lazy backend — the dominant cost on cold-cache S3.
+///     once-per-coord-per-node. (CF time-likes are a related, formerly
+///     eager-fetched case — see the note below, they're handled
+///     differently today.)
+///   - **`object`-dtype scalar or self-named 1-D coord** (vlen `string`,
+///     and incidentally `Bytes`): xarray's `_contains_datetime_like_objects`
+///     samples one element of *every* `object`-dtype variable at decode
+///     time to rule out `cftime.datetime`, independently of the two
+///     triggers above. Scoped to scalars/self-named coords (not arbitrary
+///     N-D object data vars) so an ordinary small string data variable
+///     doesn't lose its dask laziness just because it's small.
 ///
-/// Skip if total elements > `EAGER_FETCH_MAX_ELEMENTS` (1 M) — guards
-/// against accidentally pulling a multi-GB array that just happens to
-/// match the heuristic.
+/// Skip if total elements > `EAGER_FETCH_MAX_ELEMENTS` (1 M) for numeric
+/// vars, or > `EAGER_FETCH_MAX_OBJECT_ELEMENTS` (4096) for `object`-dtype
+/// vars — guards against accidentally pulling a multi-GB array that just
+/// happens to match the heuristic. The object-dtype cap is coarse (count
+/// only); the real byte-size bound is enforced post-retrieval in
+/// `fetch_all_elements`.
+/// A var is a self-named 1-D dim coord when its only dimension shares its
+/// name (e.g. `x` with `dims == ["x"]`) — the shape xarray's
+/// `_maybe_create_default_indexes` promotes into an `Index`.
+fn is_self_named_1d(var: &VarMeta) -> bool {
+    var.dims.len() == 1 && var.dims[0] == var.name
+}
+
 fn should_eager_fetch(var: &VarMeta) -> bool {
     // `shape` is empty for 0-D scalars; `iter().product()` gives 1.
     let n_elements: u64 = if var.shape.is_empty() {
@@ -603,27 +637,56 @@ fn should_eager_fetch(var: &VarMeta) -> bool {
     } else {
         var.shape.iter().product()
     };
+    if var.dtype == "object" {
+        if n_elements > EAGER_FETCH_MAX_OBJECT_ELEMENTS {
+            return false;
+        }
+        return var.shape.is_empty() || is_self_named_1d(var);
+    }
     if n_elements > EAGER_FETCH_MAX_ELEMENTS {
         return false;
     }
-    // Self-named 1-D dim coord: xarray's `_maybe_create_default_indexes`
-    // post-pass reads these on every node to construct pandas Index
-    // objects. Pre-fetching here turns N×serial into one bounded
-    // `try_join_all` against the same tokio runtime. CF time-likes
-    // are NOT pre-fetched anymore — the metadata-only patch in
-    // `backend.py` handles them without reading any chunks.
-    var.dims.len() == 1 && var.dims[0] == var.name
+    // xarray's `_maybe_create_default_indexes` post-pass reads self-named
+    // 1-D dim coords on every node to construct pandas Index objects.
+    // Pre-fetching here turns N×serial into one bounded `try_join_all`
+    // against the same tokio runtime. CF time-likes are NOT pre-fetched
+    // anymore — the metadata-only patch in `backend.py` handles them
+    // without reading any chunks.
+    is_self_named_1d(var)
 }
 
 /// Read the entire array's elements eagerly. Used by Phase C to
-/// materialise small coord/time arrays so xarray's CF decoders see
-/// resident numpy data instead of triggering chunk reads through our
-/// lazy backend. Bounded by the same semaphore the walk uses, so this
-/// can't stampede the underlying `object_store` client.
+/// materialise small coord/time/string arrays so xarray's CF decoders and
+/// `_contains_datetime_like_objects` sniff see resident numpy data instead
+/// of triggering chunk reads through our lazy backend. Bounded by the same
+/// semaphore the walk uses, so this can't stampede the underlying
+/// `object_store` client.
 async fn fetch_all_elements(
     array: &Arc<Array<dyn AsyncReadableListableStorageTraits>>,
 ) -> Result<EagerElements> {
     let subset = ArraySubset::new_with_shape(array.shape().to_vec());
+    // `String` is handled outside `for_each_supported_dtype!` (numeric-only,
+    // `Vec<T: Copy>`-shaped) — same split `array.rs::read_string_subset`
+    // already uses for the lazy path. Checked before the macro so `Bytes`
+    // (also declared `object`, not implemented here) falls through cleanly
+    // to the macro's `other` arm below with no I/O attempted.
+    if array.data_type().is::<data_type::StringDataType>() {
+        let strings: Vec<String> = array
+            .async_retrieve_array_subset::<Vec<String>>(&subset)
+            .await
+            .map_err(|err| RustytreeError::Other(format!("eager fetch failed: {err}")))?;
+        // Count cap (`should_eager_fetch`) is coarse; bound the actual
+        // resident bytes here — a 4096-element array of multi-MB strings
+        // would otherwise sail through the count check uncapped.
+        let total_bytes: usize = strings.iter().map(String::len).sum();
+        if total_bytes > EAGER_FETCH_MAX_OBJECT_BYTES {
+            return Err(RustytreeError::Other(format!(
+                "eager fetch: string payload {total_bytes} bytes exceeds \
+                 {EAGER_FETCH_MAX_OBJECT_BYTES}-byte cap"
+            )));
+        }
+        return Ok(EagerElements::Str(strings));
+    }
     for_each_supported_dtype!(array.data_type(), T => {
         let elements: Vec<T> = array
             .async_retrieve_array_subset::<Vec<T>>(&subset)
@@ -633,8 +696,9 @@ async fn fetch_all_elements(
             })?;
         Ok(eager_from_vec(elements))
     }, other => {
-        // Unsupported dtype — skip eagerly; the var stays lazy. The
-        // caller treats this `Err` as "leave eager=None and continue".
+        // Unsupported dtype (includes `Bytes`) — skip eagerly; the var
+        // stays lazy. The caller treats this `Err` as "leave eager=None
+        // and continue".
         let name = zarrs_dtype_zarr_name(other);
         Err(RustytreeError::Other(format!(
             "eager fetch: dtype {name} not yet supported"
@@ -677,9 +741,11 @@ async fn eager_phase(semaphore: &Arc<Semaphore>, nodes: &mut [NodeData]) -> Resu
                 .acquire()
                 .await
                 .map_err(|_| RustytreeError::Other("eager phase: semaphore closed".into()))?;
-            // Best-effort: an unsupported-dtype error here just means
-            // the var stays lazy. Leak everything else as a real
-            // error so the open call fails cleanly.
+            // Best-effort: ANY error here (unsupported dtype, over the
+            // object-dtype byte cap, a transient read failure, ...) just
+            // means the var stays lazy — `Err(_)` doesn't distinguish
+            // causes. The open call itself only fails on a genuine
+            // semaphore/task-join error, not on a per-var fetch failure.
             match fetch_all_elements(&array).await {
                 Ok(elements) => Ok::<_, RustytreeError>((ni, vi, Some(elements))),
                 Err(_) => Ok::<_, RustytreeError>((ni, vi, None)),

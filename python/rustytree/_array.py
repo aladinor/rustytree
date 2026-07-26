@@ -17,6 +17,17 @@ from xarray.backends.common import BackendArray
 from xarray.core import indexing
 
 
+def cast_to_read_dtype(arr: np.ndarray, read_dtype: np.dtype) -> np.ndarray:
+    """Cast `arr` to the dtype its read actually materialises, if it doesn't
+    already match. A no-op (`astype(..., copy=False)` skips the copy when the
+    dtype already matches) for every dtype except vlen `string` (declared
+    `object`, read as `StringDType`) — see `RustyBackendArray.__init__`.
+    Shared by the lazy read path below and the eager path in `backend.py`,
+    which both need the same declared-dtype/read-dtype reconciliation.
+    """
+    return arr.astype(read_dtype, copy=False)
+
+
 class RustyBackendArray(BackendArray):
     """Lazy view over a Rust-side `ZarrsArrayHandle`.
 
@@ -92,8 +103,6 @@ class RustyBackendArray(BackendArray):
         # String-like dtypes come back from Rust as an `object` array of Python
         # `str` (the `numpy` crate can only build `object` arrays); cast to the
         # dtype the read materialises — `StringDType` for `string`, `<U…` for
-        # `fixed_length_utf32`. Numeric reads already match `_read_dtype`, so the
-        # guard skips the (copying) `astype` for them.
-        if out.dtype != self._read_dtype:
-            out = out.astype(self._read_dtype)
-        return out
+        # `fixed_length_utf32`. Numeric reads already match `_read_dtype`, so
+        # this is a no-op copy-wise for them.
+        return cast_to_read_dtype(out, self._read_dtype)

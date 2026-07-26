@@ -43,7 +43,7 @@ from xarray.core.dataset import Dataset
 from xarray.core.datatree import DataTree
 from xarray.core.variable import Variable
 
-from rustytree._array import RustyBackendArray
+from rustytree._array import RustyBackendArray, cast_to_read_dtype
 
 ROOT = "/"
 
@@ -360,12 +360,15 @@ class _RustyDataStore(AbstractDataStore):
             # Phase C may have pre-fetched the variable's full contents
             # (1-D self-named dim coords + CF time-likes); other vars
             # stay lazy through `RustyBackendArray`.
-            data: Any = (
-                var["data"]
-                if "data" in var
-                else indexing.LazilyIndexedArray(RustyBackendArray(var["handle"]))
-            )
             handle = var["handle"]
+            if "data" in var:
+                # Eager path (Phase C): eager vars bypass `RustyBackendArray`
+                # entirely, so the declared-dtype/read-dtype reconciliation
+                # (`object`-declared/`StringDType`-materialized vlen strings,
+                # added for #71) has to be applied here explicitly instead.
+                data: Any = cast_to_read_dtype(var["data"], np.dtype(handle.read_dtype))
+            else:
+                data = indexing.LazilyIndexedArray(RustyBackendArray(handle))
             chunks = tuple(handle.chunks)
             attrs = dict(var["attrs"])
             # Mirror xarray's zarr backend: decode a base64 str/bytes `_FillValue`
