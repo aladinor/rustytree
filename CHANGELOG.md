@@ -11,6 +11,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-26
+
 ### Added
 
 - Eager-fetch small `object`-dtype (vlen `string`) scalars and self-named
@@ -25,7 +27,18 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   matching `object` → declared-read-dtype cast on the eager path in
   `backend.py` (mirroring the lazy path's existing cast from #71). Scoped to
   scalars and self-named 1-D coords only, so an ordinary small string data
-  variable doesn't lose its dask laziness just because it's small.
+  variable doesn't lose its dask laziness just because it's small. Verified
+  on the live `s3://nexrad-arco/KLOT` store: ~48% faster `open_datatree`
+  (8.223s → 4.241s mean over 4 trials), 42 serial lazy reads eliminated.
+
+### Changed
+
+- Routine dependency and CI-action bumps via Dependabot ([#72], [#74],
+  [#75], [#76]). Cargo: `quinn-proto` 0.11.14 → 0.11.16 ([#72]); cargo-minor
+  group — `tokio` 1.53.0 → 1.53.1, `thiserror` 2.0.18 → 2.0.19, `async-trait`
+  0.1.89 → 0.1.91, `serde` 1.0.228 → 1.0.229, `zarrs_storage` 0.4.4 → 0.4.5,
+  `serde_json` 1.0.150 → 1.0.151 ([#75]); `zarrs_object_store` 0.6.2 → 0.7.0
+  ([#76]). CI: `actions/setup-python` 6 → 7 ([#74]).
 
 ## [0.4.0] - 2026-07-24
 
@@ -851,7 +864,8 @@ below.
   intentionally not normalized — relative-vs-absolute glob
   semantics differ in `PurePosixPath.match`.
 
-[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/aladinor/rustytree/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aladinor/rustytree/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aladinor/rustytree/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/aladinor/rustytree/compare/v0.2.0...v0.2.1
@@ -900,4 +914,8 @@ below.
 [#64]: https://github.com/aladinor/rustytree/pull/64
 [#68]: https://github.com/aladinor/rustytree/pull/68
 [#71]: https://github.com/aladinor/rustytree/pull/71
+[#72]: https://github.com/aladinor/rustytree/pull/72
+[#74]: https://github.com/aladinor/rustytree/pull/74
+[#75]: https://github.com/aladinor/rustytree/pull/75
+[#76]: https://github.com/aladinor/rustytree/pull/76
 [#77]: https://github.com/aladinor/rustytree/pull/77
