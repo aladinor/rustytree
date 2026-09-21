@@ -11,6 +11,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-21
+
 ### Changed
 
 - Bump the pinned `icechunk` from 2.1.0 to 2.2.2 ([#82]). rustytree links the
@@ -887,7 +889,8 @@ below.
   intentionally not normalized — relative-vs-absolute glob
   semantics differ in `PurePosixPath.match`.
 
-[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/aladinor/rustytree/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/aladinor/rustytree/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aladinor/rustytree/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aladinor/rustytree/compare/v0.2.1...v0.3.0
