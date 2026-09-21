@@ -5,7 +5,7 @@
 #
 # Deliberately NOT managed here (bumped by hand — coordinated, cross-manifest):
 #   - icechunk / typetag: FFI lockstep. The Python `icechunk` (pyproject) must
-#     share a minor with the Rust `icechunk` (`=2.1.0`) and `typetag`
+#     share a minor with the Rust `icechunk` (`=2.2.2`) and `typetag`
 #     (`=0.2.22`) the crate links — the msgpack `Session` bytes format is
 #     coupled across the boundary, so a solo bump breaks `Session::from_bytes`
 #     (the 2.0.5→2.0.6 skew behind #46). Bump all three together manually.

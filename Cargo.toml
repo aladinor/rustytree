@@ -67,7 +67,7 @@ serde_json = "1"
 # icechunk `Session` as `AsyncReadableListableStorageTraits` so the walk
 # code stays polymorphic: the same `open_single` runs against either an
 # icechunk session or a vanilla object_store-backed store.
-icechunk = "=2.1.0"
+icechunk = "=2.2.2"
 zarrs_icechunk = "0.5"
 
 # msgpack codec — the same one icechunk's `Session::{as,from}_bytes` use. We use

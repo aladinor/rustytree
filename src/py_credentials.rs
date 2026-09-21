@@ -44,7 +44,7 @@
 //! This couples rustytree to `icechunk-python`'s internal serialized shape (the
 //! `PythonCredentialsFetcher` type name and its `pickled_function` / `initial`
 //! fields). That coupling sits inside the byte-format coupling the project
-//! already accepts by pinning `icechunk = "=2.0.5"` and requiring a matching
+//! already accepts by pinning `icechunk = "=2.2.2"` and requiring a matching
 //! `icechunk-python`. If a future `icechunk-python` renames the type, the tag no
 //! longer resolves and the friendly error in `python/rustytree/backend.py`
 //! explains the version mismatch. See

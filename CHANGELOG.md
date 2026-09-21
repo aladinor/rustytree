@@ -11,6 +11,29 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- Bump the pinned `icechunk` from 2.1.0 to 2.2.2 ([#82]). rustytree links the
+  `icechunk` Rust crate and round-trips sessions through
+  `Session::{as,from}_bytes` using plain (positional, not named-field) msgpack
+  encoding, so a struct field added anywhere ahead of the end of the encoded
+  type shifts every field after it. Between 2.1.x and 2.2.x, icechunk's
+  `RepositoryConfig` gained `max_concurrent_decodes`, inserted before
+  `caching` rather than appended — exactly the kind of change that breaks
+  cross-version `Session` bytes. The `dev` extra and CI now require
+  `icechunk>=2.2.0,<2.3` so the Python and Rust icechunk versions keep
+  sharing a minor. `typetag` stays at `=0.2.22` (icechunk 2.2.2 still
+  requires it, so the `py_credentials` `inventory` registry keeps matching
+  icechunk-python's), and icechunk-python's `PythonCredentialsFetcher` shape
+  is unchanged, so no `py_credentials.rs` code change was needed — only its
+  version-referencing doc comment. Verified: `cargo test --locked
+  --no-default-features` (58/58) and the full `pytest` suite (202 passed, 4
+  skipped for tests needing live S3/arraylake access, 1 pre-existing xfail)
+  against a `maturin develop` build linked to real icechunk-python 2.2.2,
+  covering real `Session` byte round-trips (`test_open_via_session_bytes`,
+  the ancestor-merge session tests) and the dask-distributed pickle path
+  (`test_distributed_compute_matches_threaded`).
+
 ## [0.5.0] - 2026-07-26
 
 ### Added
@@ -919,3 +942,4 @@ below.
 [#75]: https://github.com/aladinor/rustytree/pull/75
 [#76]: https://github.com/aladinor/rustytree/pull/76
 [#77]: https://github.com/aladinor/rustytree/pull/77
+[#82]: https://github.com/aladinor/rustytree/pull/82
