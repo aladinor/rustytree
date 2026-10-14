@@ -11,6 +11,28 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Changed
+
+- Bump the pinned `icechunk` from 2.2.2 to 2.3.0 and `zarrs_icechunk` from
+  0.5 to 0.6 (which requires `icechunk ~2.3.0`) ([#88]). icechunk 2.3 replaces
+  `Repository::open(config, storage, credentials)` with a builder
+  (`Repository::open(storage).execute()`); the builder's defaults (no config
+  override, no virtual-chunk credentials) match the arguments rustytree passed
+  before, so behaviour is unchanged. The `dev` extra and CI now require
+  `icechunk>=2.3.0,<2.4` so the Python and Rust icechunk keep sharing a minor;
+  CI now installs the `dev` extra straight from `pyproject.toml` instead of
+  re-listing its pins, so the Python pin lives in one place.
+  `typetag` stays at `=0.2.22` (icechunk 2.3.0 still accepts it). MSRV
+  (`rust-version`) rises from 1.91.1 to 1.95, which icechunk 2.3.0 and
+  `zarrs_icechunk` 0.6 require. Two new Rust tests cover
+  `open_local_icechunk` directly (open a freshly created repo; clear error
+  when no repo exists). Verified: `cargo test --locked --no-default-features`
+  (60/60) and the full `pytest` suite with the opt-in S3 and arraylake
+  refreshable-credentials smoke tests enabled (204 passed, 2 skipped because
+  the local KTWX repo is missing, 1 xpassed) against a `maturin develop`
+  build linked to icechunk-python 2.3.0. A repo written by icechunk-python
+  2.2.2 also reads correctly with the 2.3 build.
+
 ## [0.5.1] - 2026-09-21
 
 ### Changed
@@ -946,3 +968,4 @@ below.
 [#76]: https://github.com/aladinor/rustytree/pull/76
 [#77]: https://github.com/aladinor/rustytree/pull/77
 [#82]: https://github.com/aladinor/rustytree/pull/82
+[#88]: https://github.com/aladinor/rustytree/pull/88

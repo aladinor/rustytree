@@ -24,7 +24,6 @@
 //! `icechunk.Repository.open(s3_storage_factory)` themselves rather
 //! than passing a `s3://` URL to rustytree.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -86,14 +85,12 @@ pub(crate) async fn open_local_icechunk(path: &Path, branch: &str) -> Result<Ice
         ))
     })?;
 
-    let repo = Repository::open(None, storage, HashMap::new())
-        .await
-        .map_err(|err| {
-            RustytreeError::Other(format!(
-                "icechunk: failed to open repository at {}: {err}",
-                path.display()
-            ))
-        })?;
+    let repo = Repository::open(storage).execute().await.map_err(|err| {
+        RustytreeError::Other(format!(
+            "icechunk: failed to open repository at {}: {err}",
+            path.display()
+        ))
+    })?;
 
     let version = VersionInfo::BranchTipRef(branch.to_string());
     let session = repo.readonly_session(&version).await.map_err(|err| {
@@ -172,6 +169,43 @@ mod tests {
     fn rejects_missing_path() {
         let path = Path::new("/this/path/does/not/exist/rustytree");
         assert!(!looks_like_icechunk_repo(path));
+    }
+
+    #[test]
+    fn open_local_icechunk_opens_freshly_created_repo() {
+        // End-to-end open of a real on-disk repo.
+        let tmp = std::env::temp_dir().join("rustytree-icechunk-open-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        crate::runtime::handle().block_on(async {
+            let storage = new_local_filesystem_storage(&tmp)
+                .await
+                .expect("create local storage");
+            Repository::create(storage)
+                .execute()
+                .await
+                .expect("create repository");
+            let bundle = open_local_icechunk(&tmp, "main")
+                .await
+                .expect("open freshly created repository");
+            assert!(bundle.session.read().await.read_only());
+        });
+        std::fs::remove_dir_all(&tmp).expect("cleanup");
+    }
+
+    #[test]
+    fn open_local_icechunk_errors_when_no_repo_exists() {
+        let tmp = std::env::temp_dir().join("rustytree-icechunk-open-missing-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("create tmp dir");
+        let result = crate::runtime::handle().block_on(open_local_icechunk(&tmp, "main"));
+        let Err(RustytreeError::Other(msg)) = result else {
+            panic!("expected RustytreeError::Other for a dir with no repo");
+        };
+        assert!(
+            msg.contains("failed to open repository"),
+            "unexpected message: {msg}"
+        );
+        std::fs::remove_dir_all(&tmp).expect("cleanup");
     }
 
     #[test]

@@ -32,8 +32,8 @@ Reading icechunk requires icechunk's storage layer.
 
 The official Rust adapter [`zarrs_icechunk`](https://github.com/zarrs/zarrs_icechunk)
 exposes `AsyncIcechunkStore::new(session)` returning an
-`AsyncReadableStorageTraits` impl. `rustytree` pins `icechunk = "2"`,
-`zarrs = "0.22"`, `zarrs_icechunk = "0.5"`.
+`AsyncReadableStorageTraits` impl. `rustytree` pins `icechunk = "=2.3.0"`,
+`zarrs = "0.23"`, `zarrs_icechunk = "0.6"`.
 
 icechunk reframes the bottleneck profile:
 
@@ -80,7 +80,7 @@ re-opening the repo.
 
 ```
 rustytree/
-├── Cargo.toml                # rust-version = "1.91.1", edition = "2024"
+├── Cargo.toml                # rust-version = "1.95", edition = "2024"
 ├── pyproject.toml            # maturin build, xarray.backends entry point
 ├── CHANGELOG.md              # Keep a Changelog
 ├── README.md

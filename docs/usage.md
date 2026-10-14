@@ -15,7 +15,7 @@ uv sync --extra dev
 ```
 
 `uv sync` runs maturin's PEP 517 hook to compile the Rust extension
-and installs the Python deps in one step. Requirements: Rust 1.91.1+
+and installs the Python deps in one step. Requirements: Rust 1.95+
 (matches `Cargo.toml` `rust-version`), Python 3.12+.
 
 For development iterations on the Rust core, rebuild in-place after
