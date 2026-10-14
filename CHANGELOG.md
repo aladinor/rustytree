@@ -13,6 +13,16 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [0.5.2] - 2026-10-14
 
+### Security
+
+- Bump the locked `rustls` from 0.23.40 to 0.23.45 (lockfile only), fixing
+  GHSA-2mjx-qc3c-rqvc (TLS 1.3 handshake messages accepted across encryption
+  level boundaries, affects `>= 0.23.13, < 0.23.45`) ([#90]). Brings
+  `rustls-webpki` 0.103.15 and `aws-lc-rs` 1.18.2 along. The legacy
+  `rustls` 0.21 / `rustls-webpki` 0.101.7 chain is unchanged: it comes from
+  `aws-sdk-s3`'s default `rustls` feature (via icechunk's S3 backend), which
+  a downstream crate cannot disable, and 0.101.x has no patched release.
+
 ### Changed
 
 - Bump the pinned `icechunk` from 2.2.2 to 2.3.0 and `zarrs_icechunk` from
@@ -972,3 +982,4 @@ below.
 [#77]: https://github.com/aladinor/rustytree/pull/77
 [#82]: https://github.com/aladinor/rustytree/pull/82
 [#88]: https://github.com/aladinor/rustytree/pull/88
+[#90]: https://github.com/aladinor/rustytree/pull/90
