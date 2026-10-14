@@ -52,18 +52,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "async-compression"
-version = "0.4.48"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb61aea1a7def73ee7c350a184f0e70b32c182344e2e75bf70c9b621b83417fd"
-dependencies = [
- "compression-codecs",
- "compression-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
 name = "async-generic"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,9 +370,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-async"
-version = "1.2.14"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffcaf626bdda484571968400c326a244598634dc75fd451325a54ad1a59acfc"
+checksum = "f02e407fb3b54891734224b9ffac8a71fdd35f542500fa1af95754a6b2beb316"
 dependencies = [
  "futures-util",
  "pin-project-lite",
@@ -573,9 +561,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types"
-version = "1.5.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32b42fcf341259d85ca10fac9a2f6448a8ec691c6955a18e45bc3b71a85fab85"
+checksum = "69bb407740a197147da48238ecc94498493c9e85445732360cec180296ca45f1"
 dependencies = [
  "base64-simd",
  "bytes",
@@ -599,9 +587,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-types-convert"
-version = "0.60.14"
+version = "0.61.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e50da9f5e3ecf145b4f6eb04963e6fbf52f528017de0784a28c56b9407414b1"
+checksum = "f09916ff010d43086d52ec7d38899a5bc2ad21a2cb5428f85f1ee84a44008ba0"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
@@ -866,23 +854,6 @@ dependencies = [
  "bytes",
  "memchr",
 ]
-
-[[package]]
-name = "compression-codecs"
-version = "0.4.43"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef16c47ba2797aa6a909cc37d39911f3a6743811fe7408ac0b0cc0276b656e9"
-dependencies = [
- "compression-core",
- "zstd 0.14.0",
- "zstd-safe 8.0.0",
-]
-
-[[package]]
-name = "compression-core"
-version = "0.4.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
 name = "concurrent-queue"
@@ -1884,11 +1855,10 @@ dependencies = [
 
 [[package]]
 name = "icechunk"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "268e3d063944e80cc1b455b4893f83217c6cc7e88d6854c62381032d43e5e985"
+checksum = "0e4cb70ed1566b2b9c0e5f6f4d09ab77746e1b4ff1ee8a7c85abc745bce4e4c7"
 dependencies = [
- "async-compression",
  "async-recursion",
  "async-stream",
  "async-trait",
@@ -1907,6 +1877,7 @@ dependencies = [
  "rand",
  "regex",
  "reqwest",
+ "rlimit",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -1925,9 +1896,9 @@ dependencies = [
 
 [[package]]
 name = "icechunk-arrow-object-store"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5f03237d2d7db9d6644a39340584bf6d04c2fd00c251eafc958afc022c82f26"
+checksum = "face29f833e7f57372d7cd29659c72f439565d5fa865ab565283b9174d257948"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1949,9 +1920,9 @@ dependencies = [
 
 [[package]]
 name = "icechunk-format"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd7fca322762ecce758811d403ddf5b0da501dad80060611c2091654f46f32b"
+checksum = "14224c406f6be84bd8eba45dff14d05f4780703a4c63e14f735391050256665b"
 dependencies = [
  "base32",
  "bytes",
@@ -1975,9 +1946,9 @@ dependencies = [
 
 [[package]]
 name = "icechunk-s3"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "187d676031f290cc9b7633d731d13d8a79c3da3f209bc2ef5b8a67a526c297c4"
+checksum = "5c11627465117e77a91e729663007508606ae091a3139cc916a9c30fa420cf7b"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -2001,9 +1972,9 @@ dependencies = [
 
 [[package]]
 name = "icechunk-storage"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b22438b5a55ae6e2b773111e7a009fe511190456c6b6bf4e9dde00cd196f2de"
+checksum = "0e8b4d4586b55cbe3b5d6dbc22ee2993caaedb4fca61773c7ea5f4204e65fe32"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2011,6 +1982,7 @@ dependencies = [
  "futures",
  "icechunk-types",
  "itertools 0.15.0",
+ "percent-encoding",
  "serde",
  "thiserror",
  "tokio",
@@ -2022,9 +1994,9 @@ dependencies = [
 
 [[package]]
 name = "icechunk-types"
-version = "2.2.2"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b170eca1703ff3b8076db550e06e327b89548ee203e18350e337e5fbff355ea5"
+checksum = "47ad57f704cad49b678bb505bdbdea1d0e35c431110f4f56f81afc77d911d35d"
 dependencies = [
  "serde",
  "serde_with",
@@ -3219,6 +3191,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f35ee2729c56bb610f6dba436bf78135f728b7373bdffae2ec815b2d3eb98cc3"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -4991,9 +4972,9 @@ dependencies = [
 
 [[package]]
 name = "zarrs_icechunk"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2737168a21a5d7afa973a92e6d3308da85dee10961fdcf936852e4ac347df4df"
+checksum = "43c9e9760d591227a5464addf830ff69d4e907a62760794168c937ea96a24056"
 dependencies = [
  "async-trait",
  "futures",
