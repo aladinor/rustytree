@@ -14,7 +14,7 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 ### Changed
 
 - Bump the pinned `icechunk` from 2.2.2 to 2.3.0 and `zarrs_icechunk` from
-  0.5 to 0.6 (which requires `icechunk ~2.3.0`). icechunk 2.3 replaces
+  0.5 to 0.6 (which requires `icechunk ~2.3.0`) ([#88]). icechunk 2.3 replaces
   `Repository::open(config, storage, credentials)` with a builder
   (`Repository::open(storage).execute()`); the builder's defaults (no config
   override, no virtual-chunk credentials) match the arguments rustytree passed
@@ -968,3 +968,4 @@ below.
 [#76]: https://github.com/aladinor/rustytree/pull/76
 [#77]: https://github.com/aladinor/rustytree/pull/77
 [#82]: https://github.com/aladinor/rustytree/pull/82
+[#88]: https://github.com/aladinor/rustytree/pull/88
