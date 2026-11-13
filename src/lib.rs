@@ -338,12 +338,12 @@ fn json_to_py<'py>(py: Python<'py>, value: &JsonValue) -> PyResult<Bound<'py, Py
     }
 }
 
-#[pymodule]
-fn _rustytree(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "_rustytree")]
+fn rustytree(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_datatree, m)?)?;
     // Pickle reconstructor for `ZarrsArrayHandle.__reduce__` (issue #44). Public
     // so `pickle` can import it by name on a dask worker.
-    m.add_function(wrap_pyfunction!(array::_reopen_array_handle, m)?)?;
+    m.add_function(wrap_pyfunction!(array::reopen_array_handle, m)?)?;
     m.add_class::<ZarrsArrayHandle>()?;
     Ok(())
 }
