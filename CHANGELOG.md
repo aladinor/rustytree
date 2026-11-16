@@ -11,6 +11,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-16
+
 ### Added
 
 - Python 3.14 wheels ([#93]). The release matrix now builds CPython 3.14
@@ -30,6 +32,8 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   `#[pyfunction(name = "_reopen_array_handle")]`, so the import path
   `rustytree._rustytree` and existing `ZarrsArrayHandle` pickles are
   unaffected.
+- Lockfile-only bumps from the Dependabot `cargo-minor` group ([#92]):
+  `tokio` 1.53.2 → 1.54.1 and `serde_json` 1.0.151 → 1.0.154.
 - Bump the pinned `icechunk` from 2.3.0 to 2.3.1 ([#94]). A patch bump within
   the 2.3 minor: no serialized struct changed between 2.3.0 and 2.3.1
   (including icechunk-python's `PythonCredentialsFetcher`), so `Session`
@@ -962,7 +966,8 @@ below.
   intentionally not normalized — relative-vs-absolute glob
   semantics differ in `PurePosixPath.match`.
 
-[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/aladinor/rustytree/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/aladinor/rustytree/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/aladinor/rustytree/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/aladinor/rustytree/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/aladinor/rustytree/compare/v0.4.0...v0.5.0
@@ -1022,5 +1027,6 @@ below.
 [#82]: https://github.com/aladinor/rustytree/pull/82
 [#88]: https://github.com/aladinor/rustytree/pull/88
 [#90]: https://github.com/aladinor/rustytree/pull/90
+[#92]: https://github.com/aladinor/rustytree/pull/92
 [#93]: https://github.com/aladinor/rustytree/pull/93
 [#94]: https://github.com/aladinor/rustytree/pull/94
