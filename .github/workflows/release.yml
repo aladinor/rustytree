@@ -41,9 +41,9 @@ jobs:
           # define `__ARM_ARCH`. Native build sidesteps that and is
           # ~3× faster too.
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, manylinux: auto }
-          # Apple Silicon. The macos-14 runner is arm64-native, so the
+          # Apple Silicon. The macos-15 runner is arm64-native, so the
           # default target works without cross-compile.
-          - { os: macos-14, target: aarch64-apple-darwin, manylinux: auto }
+          - { os: macos-15, target: aarch64-apple-darwin, manylinux: auto }
         python-version: ["3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.platform.os }}
     steps:
