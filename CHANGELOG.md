@@ -54,6 +54,14 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
   anonymous-S3 smoke (`RUSTYTREE_S3_SMOKE=1`). The arraylake
   refreshable-credentials smoke (`RUSTYTREE_ARRAYLAKE_SMOKE=1`) was not run.
 
+### Fixed
+
+- Release workflow: build the macOS arm64 wheels on `macos-15` ([#96]).
+  GitHub no longer provisions the `macos-14` runner image ("The
+  configuration 'macos-14-arm64-us-default' is not supported"), which
+  cancelled all three macOS wheel cells in the pre-tag dry run and would
+  have blocked the release and PyPI publish jobs.
+
 ## [0.5.2] - 2026-10-14
 
 ### Security
@@ -1030,3 +1038,4 @@ below.
 [#92]: https://github.com/aladinor/rustytree/pull/92
 [#93]: https://github.com/aladinor/rustytree/pull/93
 [#94]: https://github.com/aladinor/rustytree/pull/94
+[#96]: https://github.com/aladinor/rustytree/pull/96
