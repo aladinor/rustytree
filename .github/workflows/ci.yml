@@ -56,7 +56,8 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.pythonLocation }}/lib
 
   # Python integration: build the cdylib via maturin and run pytest against
-  # the supported interpreter range. Each matrix cell rebuilds the extension
+  # the oldest and newest supported interpreters (3.13 wheels are built by
+  # release.yml but not tested here). Each matrix cell rebuilds the extension
   # because PyO3 cdylibs are interpreter-specific.
   python:
     name: pytest (Python ${{ matrix.python-version }})

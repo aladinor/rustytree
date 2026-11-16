@@ -30,8 +30,8 @@ non-recursive single-Dataset opens are all in. See
 | Surface | Supported | Not supported |
 |---|---|---|
 | **Zarr format** | v3 only | v2 — passing `zarr_format=2` or `consolidated=True` raises `NotImplementedError`; use stock `engine="zarr"` for v2 stores |
-| **icechunk** | `icechunk>=2.0` (the current major) | older icechunk releases |
-| **Python** | 3.12, 3.13 | older versions |
+| **icechunk** | `icechunk>=2.3,<2.4` — icechunk-python must share a minor with the icechunk crate the wheel links, because the session-bytes format is version-coupled | other icechunk minors |
+| **Python** | 3.12, 3.13, 3.14 | older versions |
 | **Platforms** | manylinux x86_64, manylinux aarch64, macOS arm64 (wheels); other platforms via sdist | Windows / macOS Intel / linux musl wheels (build from source via sdist) |
 
 ## Install

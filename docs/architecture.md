@@ -71,7 +71,7 @@ Detection cues:
 
 The cross-extension Session unwrap goes through `PySession.as_bytes()`
 (msgpack-serde) and `icechunk::session::Session::from_bytes()`. Both
-crates link the same `icechunk = "2"` so the format matches. PyO3 type
+crates link the same icechunk minor so the format matches. PyO3 type
 extraction can't reach across cdylibs, so the bytes path is the only
 way to hand a live Session from icechunk-python to rustytree without
 re-opening the repo.

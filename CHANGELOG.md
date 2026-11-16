@@ -11,23 +11,44 @@ release, that section is renamed to `[x.y.z] - YYYY-MM-DD` and a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Python 3.14 wheels ([#93]). The release matrix now builds CPython 3.14
+  wheels alongside 3.12 and 3.13 for all three platforms (manylinux x86_64,
+  manylinux aarch64, macOS arm64), CI runs the `pytest` job on 3.14 as well
+  as 3.12, and the package carries the `Programming Language :: Python ::
+  3.14` classifier. Previously `pip install rustytree-xarray` on 3.14 fell
+  back to a source build, which needs a Rust toolchain at the crate's MSRV.
+
 ### Changed
 
+- Rename two underscore-prefixed Rust items to satisfy clippy's
+  `used_underscore_items` lint under Rust 1.100 ([#93]): the `#[pymodule]`
+  function is now `rustytree` and the pickle reconstructor is
+  `reopen_array_handle`. Both keep their Python-visible names through
+  `#[pymodule(name = "_rustytree")]` and
+  `#[pyfunction(name = "_reopen_array_handle")]`, so the import path
+  `rustytree._rustytree` and existing `ZarrsArrayHandle` pickles are
+  unaffected.
 - Bump the pinned `icechunk` from 2.3.0 to 2.3.1 ([#94]). A patch bump within
-  the 2.3 minor: no serialized struct changed between 2.3.0 and 2.3.1, so
-  `Session` bytes stay compatible with any icechunk-python 2.3.x and the
+  the 2.3 minor: no serialized struct changed between 2.3.0 and 2.3.1
+  (including icechunk-python's `PythonCredentialsFetcher`), so `Session`
+  bytes stay compatible with icechunk-python 2.3.0 and 2.3.1 and the
   `icechunk>=2.3.0,<2.4` Python pin is unchanged. icechunk 2.3.1 drops
   `aws-sdk-s3`'s legacy TLS stack, so the lockfile no longer carries
   `rustls` 0.21 / `rustls-webpki` 0.101.7 / `hyper` 0.14 (the unpatched
   chain noted under 0.5.2); `rustls` stays at 0.23.45. Comments that
   repeated the exact pin now point at `Cargo.toml`, and stale version
-  references in `docs/usage.md` and the `bundle_from_session_bytes` doc
-  comment are corrected. Verified: `cargo test --locked
+  references are corrected in the README support table (icechunk row),
+  `docs/usage.md`, `docs/architecture.md`, `docs/release-process.md` (wheel
+  tag, native aarch64 build, sdist package name) and the
+  `bundle_from_session_bytes` doc comment. Verified: `cargo test --locked
   --no-default-features` (60/60) and the full `pytest` suite (202 passed, 4
   skipped for tests needing local KTWX data or live S3/arraylake access, 1
-  pre-existing xfail) against a `maturin develop` build linked to
-  icechunk-python 2.3.1, plus the network-gated anonymous-S3 smoke
-  (`RUSTYTREE_S3_SMOKE=1`).
+  pre-existing xfail, which passes under xarray 2026.9.0) against a `maturin develop` build linked to
+  icechunk-python 2.3.1 on Python 3.12 and 3.14, plus the network-gated
+  anonymous-S3 smoke (`RUSTYTREE_S3_SMOKE=1`). The arraylake
+  refreshable-credentials smoke (`RUSTYTREE_ARRAYLAKE_SMOKE=1`) was not run.
 
 ## [0.5.2] - 2026-10-14
 
@@ -1001,4 +1022,5 @@ below.
 [#82]: https://github.com/aladinor/rustytree/pull/82
 [#88]: https://github.com/aladinor/rustytree/pull/88
 [#90]: https://github.com/aladinor/rustytree/pull/90
+[#93]: https://github.com/aladinor/rustytree/pull/93
 [#94]: https://github.com/aladinor/rustytree/pull/94
