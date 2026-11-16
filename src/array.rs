@@ -170,7 +170,8 @@ impl ZarrsArrayHandle {
     /// Pickle support (issue #44): make the handle survive a `dask.distributed`
     /// task-graph serialization by reducing it to `(reconstructor, (state,))`,
     /// where `state` is the msgpack of `(reopen_spec, array_path)`. The worker
-    /// calls [`_reopen_array_handle`] to rebuild the store and re-open the array.
+    /// calls [`reopen_array_handle`] (`_reopen_array_handle` in Python) to rebuild the
+    /// store and re-open the array.
     ///
     /// Only handles that carry a reopen spec (icechunk-session stores) are
     /// picklable; others raise a clear error rather than the opaque default
@@ -478,8 +479,8 @@ pub(crate) fn strings_to_pyobject_array<'py>(
 /// `Session::from_bytes`, via `build_store_from_spec`) and re-open the single
 /// array by path. This mirrors the initial open — reusing icechunk's own serde,
 /// with no rustytree-side credential handling.
-#[pyfunction]
-pub(crate) fn _reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<ZarrsArrayHandle> {
+#[pyfunction(name = "_reopen_array_handle")]
+pub(crate) fn reopen_array_handle(py: Python<'_>, state: &[u8]) -> PyResult<ZarrsArrayHandle> {
     let (spec, path): (ReopenSpec, String) = rmp_serde::from_slice(state).map_err(|err| {
         PyValueError::new_err(format!(
             "rustytree: corrupt ZarrsArrayHandle pickle state: {err}"
