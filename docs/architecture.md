@@ -32,7 +32,7 @@ Reading icechunk requires icechunk's storage layer.
 
 The official Rust adapter [`zarrs_icechunk`](https://github.com/zarrs/zarrs_icechunk)
 exposes `AsyncIcechunkStore::new(session)` returning an
-`AsyncReadableStorageTraits` impl. `rustytree` pins `icechunk = "=2.3.0"`,
+`AsyncReadableStorageTraits` impl. `rustytree` pins `icechunk = "=2.3.1"`,
 `zarrs = "0.23"`, `zarrs_icechunk = "0.6"`.
 
 icechunk reframes the bottleneck profile:
