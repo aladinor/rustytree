@@ -120,7 +120,7 @@ Two requirements for a remote cluster:
 - **Workers must use the `spawn` start-method** (the `dask.distributed` default).
   rustytree's tokio runtime is not fork-safe.
 - **Workers need `rustytree` and a matching `icechunk` installed** — the same
-  icechunk minor as the client (currently 2.1; the session-bytes format is
+  icechunk minor as the client (currently 2.3; the session-bytes format is
   version-coupled). On Coiled, put both in the cluster's software environment.
 
 ### Credentials — don't ship secrets to workers

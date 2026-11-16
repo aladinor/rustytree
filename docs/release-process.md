@@ -3,7 +3,7 @@
 Releases are tag-driven: pushing a `vX.Y.Z` tag triggers
 [`.github/workflows/release.yml`](../.github/workflows/release.yml),
 which builds wheels (manylinux x86_64 + manylinux aarch64 + macOS
-arm64, CPython 3.12 + 3.13), builds an sdist, and attaches
+arm64, CPython 3.12 + 3.13 + 3.14), builds an sdist, and attaches
 everything to a GitHub Release with auto-generated notes.
 
 PyPI publishing is enabled via trusted-publishing OIDC; every
@@ -51,15 +51,15 @@ should not.
 
 ## What the workflow builds
 
-- **Wheels**: 6 cells (linux x86_64 + linux aarch64 + macOS arm64) ×
-  (CPython 3.12 + 3.13). manylinux tag is `auto` — `maturin-action`
-  selects the most compatible PEP 600 tag the build container
-  supports (`manylinux_2_28` today). The aarch64 cell cross-compiles
-  inside the manylinux container via QEMU and takes ~2× the wall
-  time of the native x86_64 cell.
+- **Wheels**: 9 cells (linux x86_64 + linux aarch64 + macOS arm64) ×
+  (CPython 3.12 + 3.13 + 3.14). manylinux tag is `auto` — `maturin-action`
+  selects the most compatible tag the build supports
+  (`manylinux_2_17` / `manylinux2014` as of 0.5.2). The aarch64 cells
+  build natively on the `ubuntu-24.04-arm` runner, with no QEMU or
+  cross-compile.
 - **Sdist**: one universal `.tar.gz`. Lets people on platforms we
   don't ship wheels for (Windows, macOS Intel, linux musl) build
-  from source via `pip install rustytree --no-binary rustytree`.
+  from source via `pip install rustytree-xarray --no-binary rustytree-xarray`.
 
 The `release` job is gated on `startsWith(github.ref, 'refs/tags/v')`,
 so you can `workflow_dispatch` the build matrix from a release-prep

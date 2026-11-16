@@ -119,7 +119,7 @@ pub(crate) async fn open_local_icechunk(path: &Path, branch: &str) -> Result<Ice
 /// Caveats:
 ///   - The bytes format is icechunk-internal (rmp_serde-encoded
 ///     `Session`). Format stability is bounded by icechunk's semver;
-///     we pin `icechunk = "2"` and CI must keep `icechunk` and
+///     we pin `icechunk` exactly (see `Cargo.toml`) and CI must keep `icechunk` and
 ///     `icechunk-python` versions matched.
 ///   - Sessions built by `icechunk-python` with *refreshable* credentials
 ///     (e.g. arraylake / Earthmover) embed a `PythonCredentialsFetcher` typetag
